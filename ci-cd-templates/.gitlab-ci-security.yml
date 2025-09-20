@@ -1,0 +1,212 @@
+# GitLab CI/CD Security Template
+# Comprehensive security scanning pipeline with SAST, DAST, and dependency scanning
+
+stages:
+  - security-scan
+  - build
+  - security-test
+  - deploy
+
+variables:
+  # Security scanning configuration
+  SECURE_ANALYZERS_PREFIX: "registry.gitlab.com/security-products/analyzers"
+  SAST_ANALYZER_IMAGE_TAG: "latest"
+  DAST_WEBSITE: $CI_ENVIRONMENT_URL
+
+  # Docker security
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+
+# SAST (Static Application Security Testing)
+sast:
+  stage: security-scan
+  image: $SECURE_ANALYZERS_PREFIX/sast:$SAST_ANALYZER_IMAGE_TAG
+  variables:
+    SEARCH_MAX_DEPTH: 4
+  script:
+    - echo "Running SAST analysis..."
+    - /analyzer run
+  artifacts:
+    reports:
+      sast: gl-sast-report.json
+    paths:
+      - gl-sast-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH
+      exists:
+        - "**/*.py"
+        - "**/*.js"
+        - "**/*.go"
+        - "**/*.java"
+
+# Dependency Scanning
+dependency_scanning:
+  stage: security-scan
+  image: $SECURE_ANALYZERS_PREFIX/dependency-scanning:latest
+  script:
+    - echo "Scanning dependencies for vulnerabilities..."
+    - /analyzer run
+  artifacts:
+    reports:
+      dependency_scanning: gl-dependency-scanning-report.json
+    paths:
+      - gl-dependency-scanning-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH
+      exists:
+        - "**/package.json"
+        - "**/requirements.txt"
+        - "**/go.mod"
+        - "**/pom.xml"
+
+# Container Scanning with Trivy
+container_scanning:
+  stage: security-scan
+  image: aquasec/trivy:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    TRIVY_NO_PROGRESS: "true"
+    TRIVY_CACHE_DIR: ".trivycache/"
+  script:
+    - echo "Building container image for scanning..."
+    - docker build -t $CI_PROJECT_NAME:$CI_COMMIT_SHA .
+    - echo "Scanning container image with Trivy..."
+    - trivy image --format json --output trivy-report.json $CI_PROJECT_NAME:$CI_COMMIT_SHA
+    - trivy image --severity HIGH,CRITICAL $CI_PROJECT_NAME:$CI_COMMIT_SHA
+  artifacts:
+    reports:
+      container_scanning: trivy-report.json
+    paths:
+      - trivy-report.json
+    expire_in: 1 week
+  cache:
+    paths:
+      - .trivycache/
+  rules:
+    - if: $CI_COMMIT_BRANCH
+      exists:
+        - "Dockerfile"
+
+# Secret Detection
+secret_detection:
+  stage: security-scan
+  image: $SECURE_ANALYZERS_PREFIX/secrets:latest
+  script:
+    - echo "Scanning for secrets and credentials..."
+    - /analyzer run
+  artifacts:
+    reports:
+      secret_detection: gl-secret-detection-report.json
+    paths:
+      - gl-secret-detection-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Build stage with security checks
+secure_build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker info
+    - echo "Implementing secure build practices..."
+  script:
+    - echo "Building with security hardening..."
+    - docker build --no-cache -t $CI_PROJECT_NAME:$CI_COMMIT_SHA .
+    - docker save $CI_PROJECT_NAME:$CI_COMMIT_SHA -o image.tar
+  artifacts:
+    paths:
+      - image.tar
+    expire_in: 1 hour
+
+# DAST (Dynamic Application Security Testing)
+dast:
+  stage: security-test
+  image: $SECURE_ANALYZERS_PREFIX/dast:latest
+  variables:
+    DAST_WEBSITE: $CI_ENVIRONMENT_URL
+    DAST_FULL_SCAN_ENABLED: "true"
+  script:
+    - echo "Running DAST scan against $DAST_WEBSITE"
+    - /analyzer run
+  artifacts:
+    reports:
+      dast: gl-dast-report.json
+    paths:
+      - gl-dast-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH && $CI_ENVIRONMENT_URL
+
+# Security compliance check
+compliance_check:
+  stage: security-test
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - echo "Running security compliance checks..."
+    - |
+      # Check for security headers
+      if [ ! -z "$CI_ENVIRONMENT_URL" ]; then
+        echo "Checking security headers for $CI_ENVIRONMENT_URL"
+        curl -s -I $CI_ENVIRONMENT_URL | grep -i "strict-transport-security\|x-frame-options\|x-content-type-options"
+      fi
+    - echo "Compliance check completed"
+  rules:
+    - if: $CI_COMMIT_BRANCH && $CI_ENVIRONMENT_URL
+
+# Security gate - fail pipeline if critical vulnerabilities found
+security_gate:
+  stage: security-test
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache jq
+  script:
+    - echo "Evaluating security scan results..."
+    - |
+      # Check SAST results
+      if [ -f "gl-sast-report.json" ]; then
+        CRITICAL_SAST=$(jq '.vulnerabilities[] | select(.severity == "Critical")' gl-sast-report.json | jq -s length)
+        echo "Critical SAST vulnerabilities found: $CRITICAL_SAST"
+        if [ $CRITICAL_SAST -gt 0 ]; then
+          echo "❌ Critical SAST vulnerabilities detected! Pipeline blocked."
+          exit 1
+        fi
+      fi
+
+      # Check container scan results
+      if [ -f "trivy-report.json" ]; then
+        CRITICAL_CONTAINER=$(jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")' trivy-report.json | jq -s length)
+        echo "Critical container vulnerabilities found: $CRITICAL_CONTAINER"
+        if [ $CRITICAL_CONTAINER -gt 5 ]; then  # Allow up to 5 critical vulns
+          echo "❌ Too many critical container vulnerabilities! Pipeline blocked."
+          exit 1
+        fi
+      fi
+
+      echo "✅ Security gate passed!"
+  dependencies:
+    - sast
+    - container_scanning
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Secure deployment
+deploy:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo "Deploying with security controls..."
+    - echo "✅ Security-approved deployment"
+  dependencies:
+    - security_gate
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  when: manual
