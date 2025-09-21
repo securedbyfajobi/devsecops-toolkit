@@ -1,6 +1,14 @@
-# DevSecOps Toolkit
+# 🛡️ DevSecOps Toolkit
 
-A comprehensive collection of security automation scripts, configurations, and templates for cloud-native environments.
+[![AWS](https://img.shields.io/badge/AWS-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)](https://terraform.io/)
+[![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org/)
+[![GitLab CI](https://img.shields.io/badge/GitLab%20CI-FC6D26?style=for-the-badge&logo=gitlab&logoColor=white)](https://gitlab.com/)
+
+> **A comprehensive collection of security automation scripts, configurations, and templates for cloud-native environments.**
+
+*Built by a DevSecOps Engineer with 7+ years of production experience securing enterprise cloud infrastructures.*
 
 ## 🛡️ About
 
@@ -17,13 +25,38 @@ This repository contains practical DevSecOps tools and configurations I've devel
 └── monitoring/            # Security monitoring configurations
 ```
 
+## ⚡ Quick Start
+
+```bash
+# Clone the repository
+git clone https://gitlab.com/securedbyfajobi/devsecops-toolkit.git
+cd devsecops-toolkit
+
+# Example: Run AWS security assessment
+cd aws-security
+python3 security-audit.py --region eu-west-2
+
+# Example: Apply Kubernetes security policies
+cd kubernetes-security
+kubectl apply -f pod-security-standards/
+```
+
 ## 🚀 Key Features
 
-- **AWS Security Automation** - Scripts for GuardDuty, Security Hub, and Config
-- **Kubernetes Hardening** - Security policies, RBAC configs, and scanning
-- **CI/CD Security** - SAST/DAST integration templates
-- **Compliance Automation** - ISO 27001, GDPR, PCI-DSS validation scripts
-- **Infrastructure as Code** - Secure Terraform modules and configurations
+### 🏗️ **Infrastructure Security**
+- **AWS Security Automation** - GuardDuty, Security Hub, Config automation
+- **Kubernetes Hardening** - Pod Security Standards, RBAC, Network Policies
+- **Terraform Security** - Secure modules with built-in compliance
+
+### 🔄 **CI/CD Security**
+- **Pipeline Integration** - SAST/DAST scanning templates
+- **GitLab CI/CD** - Security-first pipeline configurations
+- **Automated Scanning** - Container image and code vulnerability detection
+
+### 📋 **Compliance Automation**
+- **ISO 27001** - Automated compliance checking
+- **GDPR** - Data protection validation scripts
+- **PCI-DSS** - Payment card industry compliance tools
 
 ## 🔧 Technologies
 
@@ -55,9 +88,10 @@ Contributions are welcome! Please read the contributing guidelines before submit
 ## 📞 Contact
 
 **Adeyinka Fajobi** - DevSecOps & Cloud Security Engineer
-- 📧 adeyinkafajobi13@gmail.com
+- 📧 afajobi@securedbyfajobi.com
 - 💼 [LinkedIn](https://linkedin.com/in/fajobi10)
 - 🌐 [Portfolio](https://securedbyfajobi.com)
+- 🏆 [Certifications](https://www.credly.com/users/adeyinka-fajobi)
 
 ---
 
