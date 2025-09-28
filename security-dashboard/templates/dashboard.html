@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Monitoring Dashboard</title>
+
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Custom CSS -->
+    <style>
+        :root {
+            --primary-color: #1e3a8a;
+            --secondary-color: #3b82f6;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --dark-bg: #1f2937;
+            --card-bg: #374151;
+        }
+
+        body {
+            background-color: var(--dark-bg);
+            color: #f3f4f6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar {
+            background-color: var(--primary-color) !important;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-header {
+            background-color: rgba(59, 130, 246, 0.1);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+            color: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .severity-critical {
+            color: var(--danger-color);
+        }
+
+        .severity-high {
+            color: #f97316;
+        }
+
+        .severity-medium {
+            color: var(--warning-color);
+        }
+
+        .severity-low {
+            color: var(--success-color);
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+
+        .status-healthy {
+            background-color: var(--success-color);
+        }
+
+        .status-warning {
+            background-color: var(--warning-color);
+        }
+
+        .status-critical {
+            background-color: var(--danger-color);
+        }
+
+        .findings-table {
+            background-color: var(--card-bg);
+        }
+
+        .findings-table th {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+        }
+
+        .findings-table td {
+            border-color: rgba(59, 130, 246, 0.2);
+        }
+
+        .refresh-btn {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .loading-spinner {
+            display: none;
+        }
+
+        .alert-banner {
+            position: fixed;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1001;
+            min-width: 300px;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-shield-alt me-2"></i>
+                Security Monitoring Dashboard
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text">
+                    <i class="fas fa-clock me-1"></i>
+                    Last Updated: <span id="lastUpdated">Loading...</span>
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Alert Banner -->
+    <div id="alertBanner" class="alert-banner"></div>
+
+    <!-- Refresh Button -->
+    <button id="refreshBtn" class="btn btn-primary refresh-btn">
+        <i class="fas fa-sync-alt me-1"></i>
+        Refresh
+    </button>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-4">
+        <!-- Summary Cards -->
+        <div class="row mb-4">
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="metric-value" id="totalFindings">0</div>
+                    <div class="metric-label">
+                        <i class="fas fa-exclamation-triangle me-1"></i>
+                        Total Findings
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="metric-value" id="riskScore">0%</div>
+                    <div class="metric-label">
+                        <i class="fas fa-chart-line me-1"></i>
+                        Risk Score
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="metric-value" id="recentFindings">0</div>
+                    <div class="metric-label">
+                        <i class="fas fa-clock me-1"></i>
+                        Last 24 Hours
+                    </div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-lg-6 col-md-6">
+                <div class="metric-card">
+                    <div class="metric-value" id="complianceScore">0%</div>
+                    <div class="metric-label">
+                        <i class="fas fa-check-circle me-1"></i>
+                        Compliance Score
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row mb-4">
+            <!-- Severity Distribution -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-chart-pie me-2"></i>
+                            Findings by Severity
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="severityChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Source Distribution -->
+            <div class="col-lg-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-chart-bar me-2"></i>
+                            Findings by Source
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="sourceChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compliance Status -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-clipboard-check me-2"></i>
+                            Compliance Framework Status
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="complianceStatus" class="row">
+                            <!-- Compliance cards will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Findings Table -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-list me-2"></i>
+                            Recent Security Findings
+                        </h5>
+                        <div>
+                            <select id="severityFilter" class="form-select form-select-sm me-2" style="width: auto; display: inline-block;">
+                                <option value="">All Severities</option>
+                                <option value="CRITICAL">Critical</option>
+                                <option value="HIGH">High</option>
+                                <option value="MEDIUM">Medium</option>
+                                <option value="LOW">Low</option>
+                            </select>
+                            <select id="sourceFilter" class="form-select form-select-sm" style="width: auto; display: inline-block;">
+                                <option value="">All Sources</option>
+                                <option value="aws-security-hub">AWS Security Hub</option>
+                                <option value="azure-security-center">Azure Security Center</option>
+                                <option value="falco">Falco</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover findings-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Severity</th>
+                                        <th>Title</th>
+                                        <th>Source</th>
+                                        <th>Resource</th>
+                                        <th>Region</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="findingsTableBody">
+                                    <!-- Findings will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div class="loading-spinner position-fixed top-50 start-50 translate-middle">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Dashboard JavaScript -->
+    <script>
+        class SecurityDashboard {
+            constructor() {
+                this.severityChart = null;
+                this.sourceChart = null;
+                this.autoRefreshInterval = null;
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.startAutoRefresh();
+                this.loadDashboardData();
+            }
+
+            setupEventListeners() {
+                document.getElementById('refreshBtn').addEventListener('click', () => {
+                    this.loadDashboardData();
+                });
+
+                document.getElementById('severityFilter').addEventListener('change', () => {
+                    this.loadFindings();
+                });
+
+                document.getElementById('sourceFilter').addEventListener('change', () => {
+                    this.loadFindings();
+                });
+            }
+
+            startAutoRefresh() {
+                this.autoRefreshInterval = setInterval(() => {
+                    this.loadDashboardData();
+                }, 30000); // Refresh every 30 seconds
+            }
+
+            async loadDashboardData() {
+                try {
+                    this.showLoading();
+
+                    const [trends, compliance, findings] = await Promise.all([
+                        this.fetchTrends(),
+                        this.fetchCompliance(),
+                        this.fetchFindings()
+                    ]);
+
+                    this.updateSummaryCards(trends);
+                    this.updateCharts(trends);
+                    this.updateComplianceStatus(compliance);
+                    this.updateFindingsTable(findings);
+                    this.updateLastUpdated();
+
+                    this.hideLoading();
+                } catch (error) {
+                    console.error('Error loading dashboard data:', error);
+                    this.showAlert('Error loading dashboard data', 'danger');
+                    this.hideLoading();
+                }
+            }
+
+            async fetchTrends() {
+                const response = await fetch('/api/security/trends');
+                return await response.json();
+            }
+
+            async fetchCompliance() {
+                const response = await fetch('/api/compliance/status');
+                return await response.json();
+            }
+
+            async fetchFindings() {
+                const severityFilter = document.getElementById('severityFilter').value;
+                const sourceFilter = document.getElementById('sourceFilter').value;
+
+                let url = '/api/security/findings?limit=50';
+                if (severityFilter) url += `&severity=${severityFilter}`;
+                if (sourceFilter) url += `&source=${sourceFilter}`;
+
+                const response = await fetch(url);
+                return await response.json();
+            }
+
+            updateSummaryCards(trends) {
+                document.getElementById('totalFindings').textContent = trends.total_findings || 0;
+                document.getElementById('riskScore').textContent = `${Math.round(trends.risk_score || 0)}%`;
+                document.getElementById('recentFindings').textContent = trends.recent_findings_24h || 0;
+
+                // Calculate average compliance score
+                const avgCompliance = 85; // This would be calculated from compliance data
+                document.getElementById('complianceScore').textContent = `${avgCompliance}%`;
+            }
+
+            updateCharts(trends) {
+                this.updateSeverityChart(trends.severity_distribution || {});
+                this.updateSourceChart(trends.source_distribution || {});
+            }
+
+            updateSeverityChart(severityData) {
+                const ctx = document.getElementById('severityChart').getContext('2d');
+
+                if (this.severityChart) {
+                    this.severityChart.destroy();
+                }
+
+                this.severityChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Critical', 'High', 'Medium', 'Low'],
+                        datasets: [{
+                            data: [
+                                severityData.CRITICAL || 0,
+                                severityData.HIGH || 0,
+                                severityData.MEDIUM || 0,
+                                severityData.LOW || 0
+                            ],
+                            backgroundColor: [
+                                '#ef4444',
+                                '#f97316',
+                                '#f59e0b',
+                                '#10b981'
+                            ],
+                            borderWidth: 2,
+                            borderColor: '#374151'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: '#f3f4f6'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            updateSourceChart(sourceData) {
+                const ctx = document.getElementById('sourceChart').getContext('2d');
+
+                if (this.sourceChart) {
+                    this.sourceChart.destroy();
+                }
+
+                const sources = Object.keys(sourceData);
+                const values = Object.values(sourceData);
+
+                this.sourceChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: sources,
+                        datasets: [{
+                            label: 'Findings',
+                            data: values,
+                            backgroundColor: '#3b82f6',
+                            borderColor: '#1e40af',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    color: '#f3f4f6'
+                                },
+                                grid: {
+                                    color: 'rgba(243, 244, 246, 0.1)'
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    color: '#f3f4f6'
+                                },
+                                grid: {
+                                    color: 'rgba(243, 244, 246, 0.1)'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            updateComplianceStatus(complianceData) {
+                const container = document.getElementById('complianceStatus');
+                container.innerHTML = '';
+
+                complianceData.forEach(framework => {
+                    const col = document.createElement('div');
+                    col.className = 'col-lg-3 col-md-6 mb-3';
+
+                    const score = Math.round(framework.compliance_score);
+                    const statusClass = score >= 90 ? 'success' : score >= 70 ? 'warning' : 'danger';
+
+                    col.innerHTML = `
+                        <div class="card h-100">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">${framework.framework}</h6>
+                                <div class="metric-value text-${statusClass}">${score}%</div>
+                                <small class="text-muted">
+                                    ${framework.passing_controls}/${framework.total_controls} Controls
+                                </small>
+                            </div>
+                        </div>
+                    `;
+
+                    container.appendChild(col);
+                });
+            }
+
+            updateFindingsTable(findings) {
+                const tbody = document.getElementById('findingsTableBody');
+                tbody.innerHTML = '';
+
+                findings.forEach(finding => {
+                    const row = document.createElement('tr');
+
+                    const severityClass = `severity-${finding.severity.toLowerCase()}`;
+                    const timeAgo = this.timeAgo(new Date(finding.created_at));
+
+                    row.innerHTML = `
+                        <td>
+                            <span class="badge bg-${this.getSeverityColor(finding.severity)}">
+                                ${finding.severity}
+                            </span>
+                        </td>
+                        <td>
+                            <strong>${finding.title}</strong>
+                            <br>
+                            <small class="text-muted">${finding.description.substring(0, 100)}...</small>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">${finding.source}</span>
+                        </td>
+                        <td>
+                            <small>
+                                ${finding.resource_type}<br>
+                                <code>${finding.resource_id}</code>
+                            </small>
+                        </td>
+                        <td>${finding.region}</td>
+                        <td>
+                            <small>${timeAgo}</small>
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="dashboard.viewFinding('${finding.id}')">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    `;
+
+                    tbody.appendChild(row);
+                });
+            }
+
+            getSeverityColor(severity) {
+                switch (severity) {
+                    case 'CRITICAL': return 'danger';
+                    case 'HIGH': return 'warning';
+                    case 'MEDIUM': return 'info';
+                    case 'LOW': return 'success';
+                    default: return 'secondary';
+                }
+            }
+
+            timeAgo(date) {
+                const now = new Date();
+                const diff = now - date;
+                const minutes = Math.floor(diff / 60000);
+                const hours = Math.floor(minutes / 60);
+                const days = Math.floor(hours / 24);
+
+                if (days > 0) return `${days}d ago`;
+                if (hours > 0) return `${hours}h ago`;
+                if (minutes > 0) return `${minutes}m ago`;
+                return 'Just now';
+            }
+
+            updateLastUpdated() {
+                document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+            }
+
+            showLoading() {
+                document.querySelector('.loading-spinner').style.display = 'block';
+                document.getElementById('refreshBtn').disabled = true;
+            }
+
+            hideLoading() {
+                document.querySelector('.loading-spinner').style.display = 'none';
+                document.getElementById('refreshBtn').disabled = false;
+            }
+
+            showAlert(message, type = 'info') {
+                const alertBanner = document.getElementById('alertBanner');
+                alertBanner.innerHTML = `
+                    <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                        ${message}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                `;
+
+                // Auto-hide after 5 seconds
+                setTimeout(() => {
+                    alertBanner.innerHTML = '';
+                }, 5000);
+            }
+
+            async loadFindings() {
+                try {
+                    const findings = await this.fetchFindings();
+                    this.updateFindingsTable(findings);
+                } catch (error) {
+                    console.error('Error loading findings:', error);
+                    this.showAlert('Error loading findings', 'danger');
+                }
+            }
+
+            viewFinding(findingId) {
+                // In a real application, this would open a modal or navigate to a detail page
+                console.log('Viewing finding:', findingId);
+                this.showAlert(`Viewing finding: ${findingId}`, 'info');
+            }
+        }
+
+        // Initialize dashboard when page loads
+        let dashboard;
+        document.addEventListener('DOMContentLoaded', () => {
+            dashboard = new SecurityDashboard();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (dashboard && dashboard.autoRefreshInterval) {
+                clearInterval(dashboard.autoRefreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>

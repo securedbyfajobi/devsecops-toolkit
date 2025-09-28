@@ -1,0 +1,754 @@
+# Kubernetes Security Monitoring and Observability
+# Comprehensive security monitoring, alerting, and incident response for Kubernetes environments
+# Based on NIST Cybersecurity Framework and Kubernetes security best practices
+
+---
+# Falco security runtime monitoring
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: security-monitor
+    security.kubernetes.io/tool: "runtime-security"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falco
+        app.kubernetes.io/component: security-monitor
+    spec:
+      serviceAccountName: falco
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: falco
+        image: falcosecurity/falco:0.36.2
+        securityContext:
+          privileged: true
+        args:
+        - /usr/bin/falco
+        - --cri
+        - /run/containerd/containerd.sock
+        - --k8s-api
+        - --k8s-api-cert
+        - /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        - --k8s-api-token
+        - /var/run/secrets/kubernetes.io/serviceaccount/token
+        env:
+        - name: FALCO_K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - mountPath: /host/var/run/docker.sock
+          name: docker-socket
+        - mountPath: /host/run/containerd/containerd.sock
+          name: containerd-socket
+        - mountPath: /host/dev
+          name: dev-fs
+        - mountPath: /host/proc
+          name: proc-fs
+          readOnly: true
+        - mountPath: /host/boot
+          name: boot-fs
+          readOnly: true
+        - mountPath: /host/lib/modules
+          name: lib-modules
+          readOnly: true
+        - mountPath: /host/usr
+          name: usr-fs
+          readOnly: true
+        - mountPath: /host/etc
+          name: etc-fs
+          readOnly: true
+        - mountPath: /etc/falco
+          name: falco-config
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: 200m
+          requests:
+            memory: 512Mi
+            cpu: 100m
+      volumes:
+      - name: docker-socket
+        hostPath:
+          path: /var/run/docker.sock
+      - name: containerd-socket
+        hostPath:
+          path: /run/containerd/containerd.sock
+      - name: dev-fs
+        hostPath:
+          path: /dev
+      - name: proc-fs
+        hostPath:
+          path: /proc
+      - name: boot-fs
+        hostPath:
+          path: /boot
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+      - name: usr-fs
+        hostPath:
+          path: /usr
+      - name: etc-fs
+        hostPath:
+          path: /etc
+      - name: falco-config
+        configMap:
+          name: falco-config
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+
+---
+# Falco Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falco
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: falco
+
+---
+# Falco ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: falco
+  labels:
+    app.kubernetes.io/name: falco
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "namespaces", "pods", "replicationcontrollers", "services", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions"]
+  resources: ["daemonsets", "deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Falco ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: falco
+  labels:
+    app.kubernetes.io/name: falco
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: falco
+subjects:
+- kind: ServiceAccount
+  name: falco
+  namespace: security-system
+
+---
+# Falco Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: falco
+data:
+  falco.yaml: |
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/k8s_audit_rules.yaml
+      - /etc/falco/rules.d
+
+    time_format_iso_8601: true
+    json_output: true
+    json_include_output_property: true
+    json_include_tags_property: true
+
+    log_stderr: true
+    log_syslog: false
+    log_level: info
+
+    priority: debug
+    buffered_outputs: false
+
+    syscall_event_drops:
+      actions:
+        - log
+        - alert
+      rate: 0.03333
+      max_burst: 1000
+
+    outputs:
+      rate: 1
+      max_burst: 1000
+
+    syslog_output:
+      enabled: false
+
+    file_output:
+      enabled: false
+
+    stdout_output:
+      enabled: true
+
+    webserver:
+      enabled: true
+      listen_port: 8765
+      k8s_healthz_endpoint: /healthz
+      ssl_enabled: false
+      ssl_certificate: /etc/ssl/falco.pem
+
+    grpc:
+      enabled: false
+      bind_address: "0.0.0.0:5060"
+      threadiness: 0
+
+    grpc_output:
+      enabled: false
+
+  k8s_audit_rules.yaml: |
+    # Kubernetes Audit Rules for Enhanced Security Monitoring
+
+    - rule: K8s Audit and Secret Access
+      desc: >
+        Detect any attempt to access secrets or sensitive resources
+      condition: >
+        ka and
+        (ka.target.resource="secrets" or
+         ka.target.resource="configmaps" or
+         ka.target.subresource exists) and
+        not ka.target.name in (k8s_audit_always_true)
+      output: >
+        K8s Audit Secret Access (user=%ka.user.name verb=%ka.verb
+        target=%ka.target.resource reason=%ka.response.reason)
+      priority: WARNING
+      tags: [k8s_audit, secret_access]
+
+    - rule: K8s Audit Privilege Escalation
+      desc: >
+        Detect privilege escalation attempts in Kubernetes
+      condition: >
+        ka and
+        ka.target.resource in (clusterrolebindings, rolebindings) and
+        ka.verb in (create, update, patch) and
+        ka.request_object contains "system:masters"
+      output: >
+        K8s Audit Privilege Escalation (user=%ka.user.name verb=%ka.verb
+        target=%ka.target.resource object=%ka.request_object)
+      priority: HIGH
+      tags: [k8s_audit, privilege_escalation]
+
+    - rule: K8s Audit Pod Exec
+      desc: >
+        Detect attempts to exec into pods
+      condition: >
+        ka and
+        ka.target.subresource="exec" and
+        ka.verb=create
+      output: >
+        K8s Audit Pod Exec (user=%ka.user.name pod=%ka.target.name
+        namespace=%ka.target.namespace command=%ka.request_object)
+      priority: NOTICE
+      tags: [k8s_audit, pod_exec]
+
+    - rule: K8s Audit Sensitive Mount
+      desc: >
+        Detect creation of pods with sensitive host mounts
+      condition: >
+        ka and
+        ka.target.resource=pods and
+        ka.verb=create and
+        ka.request_object contains "/etc" or
+        ka.request_object contains "/var/run" or
+        ka.request_object contains "/proc" or
+        ka.request_object contains "/sys"
+      output: >
+        K8s Audit Sensitive Mount (user=%ka.user.name pod=%ka.target.name
+        namespace=%ka.target.namespace mounts=%ka.request_object)
+      priority: WARNING
+      tags: [k8s_audit, sensitive_mount]
+
+  falco_rules.local.yaml: |
+    # Custom Local Rules for Organization-Specific Security Policies
+
+    - rule: Unauthorized Network Connection
+      desc: Detect unauthorized outbound network connections
+      condition: >
+        outbound and
+        not proc.name in (authorized_network_tools) and
+        fd.sip not in (allowed_external_ips) and
+        fd.sport not in (allowed_external_ports)
+      output: >
+        Unauthorized network connection (user=%user.name command=%proc.cmdline
+        connection=%fd.name)
+      priority: WARNING
+      tags: [network, unauthorized_connection]
+
+    - rule: Cryptocurrency Mining Detection
+      desc: Detect potential cryptocurrency mining activities
+      condition: >
+        spawned_process and
+        (proc.name in (crypto_miners) or
+         proc.cmdline contains "xmrig" or
+         proc.cmdline contains "cryptonight" or
+         proc.cmdline contains "stratum" or
+         proc.cmdline contains "mining")
+      output: >
+        Potential cryptocurrency mining detected (user=%user.name
+        command=%proc.cmdline image=%container.image.repository)
+      priority: HIGH
+      tags: [cryptocurrency, mining, malware]
+
+    - rule: Suspicious File Access
+      desc: Detect access to sensitive system files
+      condition: >
+        open_read and
+        fd.name in (/etc/passwd, /etc/shadow, /etc/sudoers, /root/.ssh/authorized_keys) and
+        not proc.name in (authorized_system_tools)
+      output: >
+        Suspicious file access (user=%user.name command=%proc.cmdline
+        file=%fd.name container=%container.name)
+      priority: WARNING
+      tags: [file_access, sensitive_files]
+
+    - rule: Container Runtime Modification
+      desc: Detect unauthorized modifications to container runtime
+      condition: >
+        spawned_process and
+        proc.name in (docker, containerd, cri-o, podman) and
+        not user.name in (root, system:serviceaccount:kube-system)
+      output: >
+        Container runtime modification (user=%user.name command=%proc.cmdline
+        container=%container.name)
+      priority: HIGH
+      tags: [container_runtime, unauthorized_modification]
+
+---
+# Security Metrics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-metrics
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: security-metrics
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    app.kubernetes.io/name: falco
+  ports:
+  - name: metrics
+    port: 8765
+    targetPort: 8765
+    protocol: TCP
+
+---
+# Security Event Exporter for external SIEM systems
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-event-exporter
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: security-event-exporter
+    app.kubernetes.io/component: log-shipping
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: security-event-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: security-event-exporter
+    spec:
+      serviceAccountName: security-event-exporter
+      containers:
+      - name: fluentd
+        image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-1
+        env:
+        - name: ELASTICSEARCH_HOST
+          value: "elasticsearch.logging.svc.cluster.local"
+        - name: ELASTICSEARCH_PORT
+          value: "9200"
+        - name: ELASTICSEARCH_INDEX_NAME
+          value: "kubernetes-security"
+        - name: FLUENTD_SYSTEMD_CONF
+          value: "disable"
+        volumeMounts:
+        - name: fluentd-config
+          mountPath: /fluentd/etc
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        resources:
+          limits:
+            memory: 512Mi
+            cpu: 200m
+          requests:
+            memory: 256Mi
+            cpu: 100m
+      volumes:
+      - name: fluentd-config
+        configMap:
+          name: fluentd-security-config
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+
+---
+# Security Event Exporter Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: security-event-exporter
+  namespace: security-system
+
+---
+# Security Event Exporter ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: security-event-exporter
+rules:
+- apiGroups: [""]
+  resources: ["pods", "namespaces", "events"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Security Event Exporter ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: security-event-exporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: security-event-exporter
+subjects:
+- kind: ServiceAccount
+  name: security-event-exporter
+  namespace: security-system
+
+---
+# Fluentd Configuration for Security Events
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-security-config
+  namespace: security-system
+data:
+  fluent.conf: |
+    <source>
+      @type tail
+      @id falco_logs
+      path /var/log/falco/*.json
+      pos_file /var/log/fluentd-falco.log.pos
+      tag falco.*
+      format json
+      time_key timestamp
+      time_format %Y-%m-%dT%H:%M:%S.%LZ
+    </source>
+
+    <source>
+      @type kubernetes_events
+      @id kubernetes_events
+      tag kubernetes.events
+    </source>
+
+    <filter falco.**>
+      @type record_transformer
+      <record>
+        cluster_name "#{ENV['CLUSTER_NAME'] || 'default'}"
+        source_type "falco"
+        event_type "security"
+      </record>
+    </filter>
+
+    <filter kubernetes.events>
+      @type grep
+      <regexp>
+        key reason
+        pattern (Killing|Failed|FailedMount|FailedAttachVolume|FailedScheduling|Unhealthy)
+      </regexp>
+    </filter>
+
+    <filter kubernetes.events>
+      @type record_transformer
+      <record>
+        cluster_name "#{ENV['CLUSTER_NAME'] || 'default'}"
+        source_type "kubernetes"
+        event_type "operational"
+      </record>
+    </filter>
+
+    <match falco.**>
+      @type elasticsearch
+      @id out_es_falco
+      host "#{ENV['ELASTICSEARCH_HOST']}"
+      port "#{ENV['ELASTICSEARCH_PORT']}"
+      index_name security-falco
+      type_name _doc
+      include_tag_key true
+      tag_key @log_name
+      logstash_format true
+      logstash_prefix security-falco
+      <buffer>
+        @type file
+        path /var/log/fluentd-buffers/falco.buffer
+        flush_mode interval
+        retry_type exponential_backoff
+        flush_thread_count 2
+        flush_interval 5s
+        retry_forever
+        retry_max_interval 30
+        chunk_limit_size 2M
+        queue_limit_length 8
+        overflow_action block
+      </buffer>
+    </match>
+
+    <match kubernetes.events>
+      @type elasticsearch
+      @id out_es_k8s_events
+      host "#{ENV['ELASTICSEARCH_HOST']}"
+      port "#{ENV['ELASTICSEARCH_PORT']}"
+      index_name security-k8s-events
+      type_name _doc
+      include_tag_key true
+      tag_key @log_name
+      logstash_format true
+      logstash_prefix security-k8s-events
+      <buffer>
+        @type file
+        path /var/log/fluentd-buffers/k8s-events.buffer
+        flush_mode interval
+        retry_type exponential_backoff
+        flush_thread_count 2
+        flush_interval 5s
+        retry_forever
+        retry_max_interval 30
+        chunk_limit_size 2M
+        queue_limit_length 8
+        overflow_action block
+      </buffer>
+    </match>
+
+---
+# Security Alerting Rules for Prometheus
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: security-alerting-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: alerting-rules
+data:
+  security-rules.yml: |
+    groups:
+    - name: kubernetes.security
+      interval: 30s
+      rules:
+      - alert: HighSeveritySecurityEvent
+        expr: increase(falco_events_total{priority="HIGH"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "High severity security event detected"
+          description: "Falco detected {{ $value }} high severity security events in the last 5 minutes"
+
+      - alert: CriticalSecurityEvent
+        expr: increase(falco_events_total{priority="CRITICAL"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Critical security event detected"
+          description: "Falco detected {{ $value }} critical security events in the last minute"
+
+      - alert: SuspiciousNetworkActivity
+        expr: increase(falco_events_total{rule="Unauthorized Network Connection"}[10m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+          category: network
+        annotations:
+          summary: "Suspicious network activity detected"
+          description: "{{ $value }} unauthorized network connections in the last 10 minutes"
+
+      - alert: PotentialCryptocurrencyMining
+        expr: increase(falco_events_total{rule="Cryptocurrency Mining Detection"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: high
+          category: malware
+        annotations:
+          summary: "Potential cryptocurrency mining detected"
+          description: "Falco detected potential cryptocurrency mining activity"
+
+      - alert: PrivilegeEscalationAttempt
+        expr: increase(falco_events_total{rule="K8s Audit Privilege Escalation"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: privilege_escalation
+        annotations:
+          summary: "Privilege escalation attempt detected"
+          description: "Attempted privilege escalation in Kubernetes detected"
+
+      - alert: SensitiveFileAccess
+        expr: increase(falco_events_total{rule="Suspicious File Access"}[5m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+          category: file_access
+        annotations:
+          summary: "Suspicious access to sensitive files"
+          description: "{{ $value }} attempts to access sensitive system files"
+
+      - alert: PodSecurityPolicyViolation
+        expr: increase(kube_pod_security_policy_violations_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          category: policy_violation
+        annotations:
+          summary: "Pod Security Policy violation"
+          description: "{{ $value }} Pod Security Policy violations in the last 5 minutes"
+
+      - alert: NetworkPolicyViolation
+        expr: increase(cilium_policy_verdict_total{verdict="DENIED"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          category: network_policy
+        annotations:
+          summary: "Network Policy violations detected"
+          description: "{{ $value }} network policy violations in the last 5 minutes"
+
+      - alert: UnauthorizedAPIAccess
+        expr: increase(apiserver_audit_total{verb!~"get|list|watch"}[5m]) by (user, verb, objectRef_resource) > 50
+        for: 2m
+        labels:
+          severity: warning
+          category: api_access
+        annotations:
+          summary: "High volume of API modifications"
+          description: "User {{ $labels.user }} performed {{ $value }} {{ $labels.verb }} operations on {{ $labels.objectRef_resource }}"
+
+      - alert: FailedAuthenticationAttempts
+        expr: increase(apiserver_audit_total{verb="create",objectRef_subresource="token",responseStatus_code!~"2.."}[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+          category: authentication
+        annotations:
+          summary: "Multiple failed authentication attempts"
+          description: "{{ $value }} failed authentication attempts in the last 5 minutes"
+
+---
+# Security Dashboard Service Monitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: security-metrics
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: security-metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: security-metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# Security Incident Response Webhook
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-webhook
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: security-webhook
+    app.kubernetes.io/component: incident-response
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: security-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: security-webhook
+    spec:
+      containers:
+      - name: webhook
+        image: curlimages/curl:8.4.0
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          while true; do
+            # Listen for webhook calls and forward to incident response system
+            nc -l -p 8080 -c 'echo -e "HTTP/1.1 200 OK\n\n Security alert received"'
+          done
+        ports:
+        - containerPort: 8080
+        env:
+        - name: INCIDENT_RESPONSE_URL
+          valueFrom:
+            secretKeyRef:
+              name: incident-response-config
+              key: webhook-url
+        resources:
+          limits:
+            memory: 128Mi
+            cpu: 100m
+          requests:
+            memory: 64Mi
+            cpu: 50m
+
+---
+# Security Webhook Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-webhook
+  namespace: security-system
+  labels:
+    app.kubernetes.io/name: security-webhook
+spec:
+  selector:
+    app.kubernetes.io/name: security-webhook
+  ports:
+  - name: webhook
+    port: 8080
+    targetPort: 8080
+    protocol: TCP

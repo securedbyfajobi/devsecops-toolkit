@@ -1,0 +1,370 @@
+# Container Security Scanner Configuration
+# Comprehensive configuration for container and image security scanning
+
+# Scanner configurations
+scanners:
+  # Trivy - Comprehensive vulnerability scanner
+  trivy:
+    enabled: true
+    db_update: true
+    timeout: 300
+    cache_dir: "/tmp/trivy-cache"
+    severity_filter: ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    scan_types:
+      - "vuln"
+      - "secret"
+      - "config"
+      - "license"
+
+  # Grype - Anchore's vulnerability scanner
+  grype:
+    enabled: true
+    db_update: true
+    timeout: 300
+    cache_dir: "/tmp/grype-cache"
+    fail_on_severity: "HIGH"
+    scope: "all-layers"
+
+  # Clair - CoreOS vulnerability scanner
+  clair:
+    enabled: false
+    endpoint: "http://localhost:6060"
+    timeout: 120
+    api_version: "v3"
+
+  # Snyk - Commercial vulnerability scanner
+  snyk:
+    enabled: false
+    token: "${SNYK_TOKEN}"
+    org: "${SNYK_ORG}"
+    timeout: 300
+    severity_threshold: "medium"
+
+  # Twistlock/Prisma Cloud
+  twistlock:
+    enabled: false
+    endpoint: "${TWISTLOCK_ENDPOINT}"
+    username: "${TWISTLOCK_USERNAME}"
+    password: "${TWISTLOCK_PASSWORD}"
+
+  # Aqua Security
+  aqua:
+    enabled: false
+    endpoint: "${AQUA_ENDPOINT}"
+    username: "${AQUA_USERNAME}"
+    password: "${AQUA_PASSWORD}"
+
+# Security check configurations
+security_checks:
+  # Dockerfile best practices
+  dockerfile_best_practices:
+    enabled: true
+    checks:
+      - "non_root_user"
+      - "health_check"
+      - "no_secrets_in_env"
+      - "minimal_base_image"
+      - "no_dangerous_ports"
+      - "proper_labels"
+      - "minimal_packages"
+
+  # Secrets detection
+  secrets_detection:
+    enabled: true
+    engines:
+      - "trivy"
+      - "trufflehog"
+      - "gitleaks"
+    patterns:
+      - "aws_access_key"
+      - "aws_secret_key"
+      - "private_key"
+      - "ssh_key"
+      - "api_key"
+      - "password"
+      - "token"
+      - "certificate"
+
+  # Malware detection
+  malware_detection:
+    enabled: true
+    engines:
+      - "clamav"
+      - "yara"
+    update_definitions: true
+    scan_timeout: 600
+
+  # Compliance policies
+  compliance_policies:
+    enabled: true
+    frameworks:
+      - "cis_docker"
+      - "nist_800_190"
+      - "pci_dss"
+      - "sox"
+      - "hipaa"
+      - "gdpr"
+
+  # License scanning
+  license_scanning:
+    enabled: true
+    allowed_licenses:
+      - "MIT"
+      - "Apache-2.0"
+      - "BSD-3-Clause"
+      - "BSD-2-Clause"
+      - "ISC"
+    denied_licenses:
+      - "GPL-3.0"
+      - "AGPL-3.0"
+      - "WTFPL"
+    unknown_license_action: "warn"
+
+  # Configuration analysis
+  config_analysis:
+    enabled: true
+    checks:
+      - "privileged_containers"
+      - "host_network"
+      - "host_pid"
+      - "host_ipc"
+      - "capabilities"
+      - "volumes"
+      - "port_bindings"
+
+# Severity and thresholds
+severity:
+  threshold: "MEDIUM"
+  fail_on_critical: true
+  fail_on_high: true
+  fail_on_medium: false
+  fail_on_low: false
+
+  # Custom scoring weights
+  scoring:
+    critical: 10.0
+    high: 7.0
+    medium: 4.0
+    low: 1.0
+    info: 0.1
+
+# Output and reporting
+output:
+  formats:
+    - "json"
+    - "html"
+    - "sarif"
+    - "xml"
+    - "csv"
+
+  # Report customization
+  report:
+    include_passed_checks: false
+    include_info_findings: false
+    group_by_severity: true
+    include_remediation: true
+    include_references: true
+
+  # File naming
+  filename_template: "container-scan-{image}-{timestamp}"
+  timestamp_format: "%Y%m%d_%H%M%S"
+
+# Integration settings
+integrations:
+  # AWS Security Hub
+  aws_security_hub:
+    enabled: false
+    region: "us-east-1"
+    account_id: "${AWS_ACCOUNT_ID}"
+    product_arn: "arn:aws:securityhub:us-east-1::product/devsecops-toolkit/container-security"
+    batch_size: 100
+
+  # JIRA integration
+  jira:
+    enabled: false
+    url: "${JIRA_URL}"
+    username: "${JIRA_USERNAME}"
+    password: "${JIRA_PASSWORD}"
+    project_key: "SEC"
+    issue_type: "Bug"
+    severity_mapping:
+      critical: "Blocker"
+      high: "Critical"
+      medium: "Major"
+      low: "Minor"
+
+  # Slack notifications
+  slack:
+    enabled: false
+    webhook_url: "${SLACK_WEBHOOK_URL}"
+    channel: "#security-alerts"
+    notify_on_severity: ["CRITICAL", "HIGH"]
+
+  # Email notifications
+  email:
+    enabled: false
+    smtp_server: "${SMTP_SERVER}"
+    smtp_port: 587
+    username: "${SMTP_USERNAME}"
+    password: "${SMTP_PASSWORD}"
+    from_address: "security@company.com"
+    to_addresses:
+      - "security-team@company.com"
+      - "devops@company.com"
+
+  # DefectDojo
+  defectdojo:
+    enabled: false
+    url: "${DEFECTDOJO_URL}"
+    api_key: "${DEFECTDOJO_API_KEY}"
+    product_id: 1
+    engagement_id: 1
+    test_type: "Container Security Scan"
+
+# Performance settings
+performance:
+  max_concurrent_scans: 5
+  scan_timeout: 1800  # 30 minutes
+  memory_limit: "2Gi"
+  cpu_limit: "1000m"
+  cache_enabled: true
+  cache_ttl: 3600  # 1 hour
+
+# Registry configurations
+registries:
+  - name: "docker_hub"
+    type: "docker"
+    url: "registry-1.docker.io"
+    username: "${DOCKER_HUB_USERNAME}"
+    password: "${DOCKER_HUB_PASSWORD}"
+
+  - name: "ecr"
+    type: "aws_ecr"
+    region: "us-east-1"
+    registry_id: "${AWS_ACCOUNT_ID}"
+
+  - name: "gcr"
+    type: "google_gcr"
+    project_id: "${GCP_PROJECT_ID}"
+    service_account_key: "${GCP_SERVICE_ACCOUNT_KEY}"
+
+  - name: "acr"
+    type: "azure_acr"
+    registry_name: "${AZURE_REGISTRY_NAME}"
+    subscription_id: "${AZURE_SUBSCRIPTION_ID}"
+
+  - name: "harbor"
+    type: "harbor"
+    url: "${HARBOR_URL}"
+    username: "${HARBOR_USERNAME}"
+    password: "${HARBOR_PASSWORD}"
+
+# Policy definitions
+policies:
+  # Base image policies
+  base_images:
+    allowed_registries:
+      - "docker.io/library"
+      - "gcr.io/distroless"
+      - "registry.access.redhat.com/ubi8"
+      - "mcr.microsoft.com"
+
+    denied_images:
+      - ".*:latest"
+      - ".*:master"
+      - ".*:main"
+      - "alpine:3.6"  # Known vulnerabilities
+
+    preferred_images:
+      - "gcr.io/distroless/*"
+      - "registry.access.redhat.com/ubi8/*"
+      - "alpine:3.17"
+      - "ubuntu:22.04"
+
+  # Security policies
+  security:
+    max_critical_vulnerabilities: 0
+    max_high_vulnerabilities: 5
+    max_medium_vulnerabilities: 20
+    max_total_vulnerabilities: 100
+
+    required_checks:
+      - "non_root_user"
+      - "no_secrets"
+      - "health_check"
+      - "minimal_capabilities"
+
+    forbidden_practices:
+      - "run_as_root"
+      - "privileged_mode"
+      - "host_network"
+      - "host_pid"
+      - "exposed_dangerous_ports"
+
+  # Compliance policies
+  compliance:
+    cis_docker:
+      version: "1.6.0"
+      level: 1
+      exclude_checks: []
+
+    nist_800_190:
+      controls:
+        - "CM-2"  # Baseline Configuration
+        - "CM-3"  # Configuration Change Control
+        - "CM-6"  # Configuration Settings
+        - "SI-2"  # Flaw Remediation
+        - "SI-7"  # Software Integrity
+
+    pci_dss:
+      version: "4.0"
+      requirements:
+        - "6.5.1"  # Injection flaws
+        - "6.5.10" # Broken authentication
+        - "11.2.1" # Vulnerability scanning
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/container-scanner.log"
+  max_size: "100MB"
+  backup_count: 5
+
+  audit_log:
+    enabled: true
+    file: "logs/audit.log"
+    include_scan_results: true
+    include_policy_violations: true
+
+# Caching configuration
+cache:
+  enabled: true
+  backend: "redis"  # redis, file, memory
+  redis_url: "redis://localhost:6379/1"
+  ttl:
+    vulnerability_db: 3600
+    scan_results: 1800
+    image_metadata: 7200
+
+# Development and testing
+development:
+  mock_scanners: false
+  test_images:
+    - "alpine:3.17"
+    - "nginx:1.23"
+    - "node:18-alpine"
+    - "python:3.11-slim"
+
+  test_registries:
+    - "docker.io"
+    - "localhost:5000"
+
+# Feature flags
+features:
+  experimental_scanners: false
+  ai_powered_analysis: false
+  runtime_protection: false
+  image_signing_verification: true
+  sbom_generation: true
+  supply_chain_analysis: true

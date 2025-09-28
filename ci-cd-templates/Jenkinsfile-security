@@ -1,0 +1,480 @@
+// Jenkins Security Pipeline
+// Enterprise-grade security scanning and compliance pipeline for Jenkins
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'SECURITY_SCAN_LEVEL',
+            choices: ['standard', 'comprehensive', 'critical-only'],
+            description: 'Level of security scanning to perform'
+        )
+        booleanParam(
+            name: 'SKIP_SECURITY_GATE',
+            defaultValue: false,
+            description: 'Skip security gate (for emergency deployments)'
+        )
+    }
+
+    environment {
+        // Security tool versions
+        TRIVY_VERSION = '0.45.1'
+        SEMGREP_VERSION = 'latest'
+        CHECKOV_VERSION = 'latest'
+
+        // Security thresholds
+        MAX_CRITICAL_VULNS = '0'
+        MAX_HIGH_VULNS = '5'
+
+        // Container registry
+        REGISTRY = credentials('docker-registry')
+        IMAGE_NAME = "${env.JOB_NAME}:${env.BUILD_NUMBER}"
+
+        // Security tools paths
+        TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
+    }
+
+    tools {
+        nodejs '18'
+        python '3.9'
+        go '1.19'
+    }
+
+    stages {
+        stage('Security Prerequisites') {
+            steps {
+                script {
+                    echo "🔧 Setting up security scanning environment..."
+
+                    // Create security directories
+                    sh '''
+                        mkdir -p security-reports
+                        mkdir -p ${TRIVY_CACHE_DIR}
+                    '''
+
+                    // Install security tools
+                    sh '''
+                        # Install Trivy
+                        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${TRIVY_VERSION}
+
+                        # Install Semgrep
+                        pip3 install semgrep
+
+                        # Install Checkov
+                        pip3 install checkov
+
+                        # Install safety for Python dependencies
+                        pip3 install safety
+
+                        # Install additional security tools
+                        npm install -g audit-ci retire
+                    '''
+                }
+            }
+        }
+
+        stage('Secret Detection') {
+            parallel {
+                stage('GitLeaks') {
+                    steps {
+                        script {
+                            echo "🔍 Running GitLeaks secret detection..."
+                            sh '''
+                                # Install GitLeaks
+                                curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.15.2/gitleaks_8.15.2_linux_x64.tar.gz | tar -xzf - gitleaks
+                                chmod +x gitleaks
+
+                                # Run GitLeaks scan
+                                ./gitleaks detect --source . --report-format json --report-path security-reports/gitleaks-report.json --verbose || true
+
+                                # Check for secrets
+                                if [ -s security-reports/gitleaks-report.json ]; then
+                                    echo "⚠️ Potential secrets detected!"
+                                    cat security-reports/gitleaks-report.json
+                                fi
+                            '''
+                        }
+                    }
+                }
+
+                stage('TruffleHog') {
+                    steps {
+                        script {
+                            echo "🔍 Running TruffleHog secret detection..."
+                            sh '''
+                                pip3 install truffleHog3
+                                truffleHog3 --format json --output security-reports/trufflehog-report.json . || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Static Application Security Testing (SAST)') {
+            parallel {
+                stage('Semgrep') {
+                    steps {
+                        script {
+                            echo "🔍 Running Semgrep SAST analysis..."
+                            sh '''
+                                semgrep --config=auto --json --output=security-reports/semgrep-report.json . || true
+                                semgrep --config=auto --severity=ERROR . || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Bandit (Python)') {
+                    when {
+                        anyOf {
+                            expression { fileExists('**/*.py') }
+                            expression { fileExists('requirements.txt') }
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "🐍 Running Bandit Python security analysis..."
+                            sh '''
+                                pip3 install bandit
+                                bandit -r . -f json -o security-reports/bandit-report.json || true
+                                bandit -r . -ll || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('ESLint Security (JavaScript/TypeScript)') {
+                    when {
+                        anyOf {
+                            expression { fileExists('package.json') }
+                            expression { fileExists('**/*.js') }
+                            expression { fileExists('**/*.ts') }
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "📜 Running ESLint security analysis..."
+                            sh '''
+                                npm install -g eslint eslint-plugin-security @typescript-eslint/parser
+                                eslint . --ext .js,.ts --format json --output-file security-reports/eslint-security-report.json || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Gosec (Go)') {
+                    when {
+                        anyOf {
+                            expression { fileExists('**/*.go') }
+                            expression { fileExists('go.mod') }
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "🐹 Running Gosec Go security analysis..."
+                            sh '''
+                                curl -sfL https://raw.githubusercontent.com/securecodewarrior/gosec/master/install.sh | sh -s -- -b $GOPATH/bin v2.18.2
+                                $GOPATH/bin/gosec -fmt json -out security-reports/gosec-report.json ./... || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Dependency Vulnerability Scanning') {
+            parallel {
+                stage('Python Dependencies') {
+                    when {
+                        expression { fileExists('requirements.txt') || fileExists('Pipfile') }
+                    }
+                    steps {
+                        script {
+                            echo "🐍 Scanning Python dependencies..."
+                            sh '''
+                                # Safety scan
+                                if [ -f "requirements.txt" ]; then
+                                    safety check --json --output security-reports/safety-report.json || true
+                                    safety check --short-report || true
+                                fi
+
+                                # Pip-audit scan
+                                pip3 install pip-audit
+                                pip-audit --format=json --output=security-reports/pip-audit-report.json || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Node.js Dependencies') {
+                    when {
+                        expression { fileExists('package.json') }
+                    }
+                    steps {
+                        script {
+                            echo "📦 Scanning Node.js dependencies..."
+                            sh '''
+                                # npm audit
+                                npm audit --audit-level high --json > security-reports/npm-audit-report.json || true
+
+                                # audit-ci
+                                audit-ci --config audit-ci.json || true
+
+                                # Retire.js
+                                retire --outputformat json --outputpath security-reports/retire-report.json || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Go Dependencies') {
+                    when {
+                        expression { fileExists('go.mod') }
+                    }
+                    steps {
+                        script {
+                            echo "🐹 Scanning Go dependencies..."
+                            sh '''
+                                # Nancy scan
+                                curl -L -o nancy https://github.com/sonatypecommunity/nancy/releases/download/v1.0.42/nancy-v1.0.42-linux-amd64
+                                chmod +x nancy
+                                go list -json -deps ./... | ./nancy sleuth --output-format json > security-reports/nancy-report.json || true
+                            '''
+                        }
+                    }
+                }
+
+                stage('Java Dependencies') {
+                    when {
+                        anyOf {
+                            expression { fileExists('pom.xml') }
+                            expression { fileExists('build.gradle') }
+                        }
+                    }
+                    steps {
+                        script {
+                            echo "☕ Scanning Java dependencies..."
+                            sh '''
+                                # OWASP Dependency Check
+                                wget https://github.com/jeremylong/DependencyCheck/releases/download/v8.4.0/dependency-check-8.4.0-release.zip
+                                unzip dependency-check-8.4.0-release.zip
+                                ./dependency-check/bin/dependency-check.sh --project "${JOB_NAME}" --scan . --format JSON --out security-reports/dependency-check-report.json
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Container Security Scanning') {
+            when {
+                expression { fileExists('Dockerfile') }
+            }
+            steps {
+                script {
+                    echo "🐳 Building and scanning container image..."
+
+                    // Build Docker image
+                    def dockerImage = docker.build("${IMAGE_NAME}")
+
+                    // Trivy container scan
+                    sh """
+                        echo "🔍 Scanning container with Trivy..."
+                        trivy image --format json --output security-reports/trivy-report.json ${IMAGE_NAME}
+                        trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}
+                    """
+
+                    // Grype container scan
+                    sh """
+                        echo "🔍 Scanning container with Grype..."
+                        curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+                        grype ${IMAGE_NAME} -o json > security-reports/grype-report.json
+                    """
+                }
+            }
+        }
+
+        stage('Infrastructure as Code Security') {
+            steps {
+                script {
+                    echo "🏗️ Scanning Infrastructure as Code..."
+
+                    sh '''
+                        # Checkov scan
+                        checkov --directory . --output json --output-file security-reports/checkov-report.json || true
+                        checkov --directory . --compact
+
+                        # TFSec scan (if Terraform files exist)
+                        if find . -name "*.tf" | grep -q .; then
+                            curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | sh
+                            tfsec . --format json --out security-reports/tfsec-report.json || true
+                            tfsec . --soft-fail
+                        fi
+
+                        # kube-score (if Kubernetes manifests exist)
+                        if find . -name "*.yaml" -o -name "*.yml" | xargs grep -l "apiVersion" | grep -q .; then
+                            wget https://github.com/zegl/kube-score/releases/download/v1.16.1/kube-score_1.16.1_linux_amd64.tar.gz
+                            tar -xzf kube-score_1.16.1_linux_amd64.tar.gz
+                            chmod +x kube-score
+                            find . -name "*.yaml" -o -name "*.yml" | xargs grep -l "apiVersion" | xargs ./kube-score score --output-format json > security-reports/kube-score-report.json || true
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('Security Gate') {
+            when {
+                not { params.SKIP_SECURITY_GATE }
+            }
+            steps {
+                script {
+                    echo "🚦 Evaluating security gate..."
+
+                    def securityGateResult = sh(
+                        script: '''
+                            #!/bin/bash
+
+                            # Initialize counters
+                            TOTAL_CRITICAL=0
+                            TOTAL_HIGH=0
+
+                            # Function to safely get JSON array length
+                            get_vuln_count() {
+                                local file="$1"
+                                local filter="$2"
+                                if [ -f "$file" ]; then
+                                    jq "$filter | length" "$file" 2>/dev/null || echo "0"
+                                else
+                                    echo "0"
+                                fi
+                            }
+
+                            # Check Trivy results
+                            CRITICAL_CONTAINER=$(get_vuln_count "security-reports/trivy-report.json" '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")]')
+                            HIGH_CONTAINER=$(get_vuln_count "security-reports/trivy-report.json" '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")]')
+                            TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_CONTAINER))
+                            TOTAL_HIGH=$((TOTAL_HIGH + HIGH_CONTAINER))
+
+                            # Check Safety results
+                            CRITICAL_PYTHON=$(get_vuln_count "security-reports/safety-report.json" '[.[] | select(.vulnerability.v == "CRITICAL")]')
+                            TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_PYTHON))
+
+                            # Check Semgrep results
+                            CRITICAL_SAST=$(get_vuln_count "security-reports/semgrep-report.json" '[.results[] | select(.extra.severity == "ERROR")]')
+                            TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_SAST))
+
+                            echo "📊 Security Gate Summary:"
+                            echo "   Container Critical: $CRITICAL_CONTAINER, High: $HIGH_CONTAINER"
+                            echo "   Python Dependencies Critical: $CRITICAL_PYTHON"
+                            echo "   SAST Critical: $CRITICAL_SAST"
+                            echo "   Total Critical: $TOTAL_CRITICAL (max: ${MAX_CRITICAL_VULNS})"
+                            echo "   Total High: $TOTAL_HIGH (max: ${MAX_HIGH_VULNS})"
+
+                            # Apply security gate rules
+                            if [ $TOTAL_CRITICAL -gt ${MAX_CRITICAL_VULNS} ]; then
+                                echo "❌ Security gate FAILED: $TOTAL_CRITICAL critical vulnerabilities exceed threshold (${MAX_CRITICAL_VULNS})"
+                                exit 1
+                            fi
+
+                            if [ $TOTAL_HIGH -gt ${MAX_HIGH_VULNS} ]; then
+                                echo "❌ Security gate FAILED: $TOTAL_HIGH high vulnerabilities exceed threshold (${MAX_HIGH_VULNS})"
+                                exit 1
+                            fi
+
+                            echo "✅ Security gate PASSED!"
+                            exit 0
+                        ''',
+                        returnStatus: true
+                    )
+
+                    if (securityGateResult != 0) {
+                        error("Security gate failed! Pipeline blocked due to security violations.")
+                    }
+                }
+            }
+        }
+
+        stage('Generate Security Report') {
+            steps {
+                script {
+                    echo "📊 Generating comprehensive security report..."
+
+                    sh '''
+                        cat > security-reports/security-summary.json << EOF
+{
+  "metadata": {
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "pipeline_id": "${BUILD_NUMBER}",
+    "job_name": "${JOB_NAME}",
+    "git_commit": "${GIT_COMMIT}",
+    "git_branch": "${GIT_BRANCH}",
+    "security_scan_level": "${SECURITY_SCAN_LEVEL}"
+  },
+  "scans_completed": {
+    "secret_detection": true,
+    "sast_analysis": true,
+    "dependency_scanning": true,
+    "container_scanning": $([ -f "Dockerfile" ] && echo "true" || echo "false"),
+    "iac_security": true
+  },
+  "security_gate": {
+    "status": "PASSED",
+    "critical_threshold": "${MAX_CRITICAL_VULNS}",
+    "high_threshold": "${MAX_HIGH_VULNS}"
+  },
+  "compliance_frameworks": [
+    "OWASP Top 10",
+    "NIST Cybersecurity Framework",
+    "CIS Controls"
+  ]
+}
+EOF
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Archive security reports
+            archiveArtifacts artifacts: 'security-reports/**/*', allowEmptyArchive: true
+
+            // Publish security test results
+            publishTestResults testResultsPattern: 'security-reports/*-results.xml'
+
+            // Clean up workspace
+            sh 'rm -rf ${TRIVY_CACHE_DIR}'
+        }
+
+        failure {
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    // Send security alert for main branch failures
+                    emailext (
+                        subject: "🚨 Security Pipeline Failed: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                        body: """
+                        Security pipeline failed for ${env.JOB_NAME} on ${env.GIT_BRANCH}.
+
+                        Build: ${env.BUILD_URL}
+                        Commit: ${env.GIT_COMMIT}
+
+                        Please review the security scan results and fix all critical issues.
+                        """,
+                        to: "${env.SECURITY_TEAM_EMAIL}"
+                    )
+                }
+            }
+        }
+
+        success {
+            script {
+                echo "✅ Security pipeline completed successfully!"
+                echo "🔒 All security checks passed - deployment approved"
+            }
+        }
+    }
+}

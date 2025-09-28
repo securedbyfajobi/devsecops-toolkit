@@ -1,0 +1,606 @@
+# Kubernetes RBAC Security Configuration
+# Comprehensive Role-Based Access Control (RBAC) following principle of least privilege
+# Based on CIS Kubernetes Benchmark and NIST Zero Trust Architecture
+
+---
+# Namespace for security system components
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-system
+  labels:
+    name: security-system
+    security.kubernetes.io/system: "true"
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# Developer Role - Read-only access to development namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: developer
+  labels:
+    rbac.kubernetes.io/role-type: development
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log", "pods/status"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies", "ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Senior Developer Role - Deployment access in development
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: senior-developer
+  labels:
+    rbac.kubernetes.io/role-type: development-elevated
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "endpoints", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+  resourceNames: ["dev-*"]  # Only development secrets
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies", "ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/exec", "pods/portforward"]
+  verbs: ["create"]
+
+---
+# DevOps Engineer Role - Cross-namespace access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devops-engineer
+  labels:
+    rbac.kubernetes.io/role-type: operations
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "endpoints", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies", "ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["extensions"]
+  resources: ["deployments", "replicasets", "daemonsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Security Engineer Role - Security monitoring and policy management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: security-engineer
+  labels:
+    rbac.kubernetes.io/role-type: security
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "namespaces", "pods", "services", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["policy"]
+  resources: ["podsecuritypolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "clusterroles", "rolebindings", "clusterrolebindings"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["security.openshift.io"]
+  resources: ["securitycontextconstraints"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["admission.k8s.io"]
+  resources: ["validatingadmissionwebhooks", "mutatingadmissionwebhooks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Site Reliability Engineer (SRE) Role - Production monitoring and troubleshooting
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre
+  labels:
+    rbac.kubernetes.io/role-type: reliability
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "namespaces", "pods", "services", "events", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log", "pods/status", "pods/exec"]
+  verbs: ["get", "list", "create"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Production Deploy Role - Limited deployment access to production
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: production
+  name: production-deployer
+  labels:
+    rbac.kubernetes.io/role-type: production-deploy
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+  resourceNames: []  # Restrict to specific deployment names if needed
+- apiGroups: [""]
+  resources: ["services", "configmaps"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Auditor Role - Read-only access for compliance auditing
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: auditor
+  labels:
+    rbac.kubernetes.io/role-type: compliance
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: []  # No access to secret contents
+- apiGroups: [""]
+  resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  verbs: []  # No interactive access
+
+---
+# Emergency Access Role - Break-glass access (requires approval)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: emergency-access
+  labels:
+    rbac.kubernetes.io/role-type: emergency
+    rbac.kubernetes.io/approval-required: "true"
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+# Service Account for CI/CD Pipeline
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cicd-deployer
+  namespace: default
+  labels:
+    app.kubernetes.io/component: cicd
+automountServiceAccountToken: false
+
+---
+# CI/CD Pipeline Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cicd-deployer
+  labels:
+    rbac.kubernetes.io/role-type: automation
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["secrets", "configmaps", "services"]
+  verbs: ["get", "list", "create", "update", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "delete"]
+
+---
+# Monitoring Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitoring
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/component: monitoring
+automountServiceAccountToken: true
+
+---
+# Monitoring ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitoring
+  labels:
+    rbac.kubernetes.io/role-type: monitoring
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+  verbs: ["get"]
+
+---
+# Backup Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-operator
+  namespace: backup-system
+  labels:
+    app.kubernetes.io/component: backup
+automountServiceAccountToken: true
+
+---
+# Backup ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: backup-operator
+  labels:
+    rbac.kubernetes.io/role-type: backup
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumes", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["secrets", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Example RoleBindings for teams
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developers-team
+  namespace: development
+  labels:
+    rbac.kubernetes.io/team: development
+subjects:
+- kind: User
+  name: dev-team-member-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: dev-team-member-2
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: developers
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Senior Developers RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: senior-developers-team
+  namespace: development
+  labels:
+    rbac.kubernetes.io/team: senior-development
+subjects:
+- kind: User
+  name: senior-dev-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: senior-dev-2
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: senior-developers
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: senior-developer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# DevOps Team ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devops-team
+  labels:
+    rbac.kubernetes.io/team: devops
+subjects:
+- kind: User
+  name: devops-engineer-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: devops-engineer-2
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: devops-engineers
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: devops-engineer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Security Team ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: security-team
+  labels:
+    rbac.kubernetes.io/team: security
+subjects:
+- kind: User
+  name: security-engineer-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: security-engineer-2
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: security-engineers
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: security-engineer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# SRE Team ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-team
+  labels:
+    rbac.kubernetes.io/team: sre
+subjects:
+- kind: User
+  name: sre-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: sre-2
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: site-reliability-engineers
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: sre
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Production Deployers RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: production-deployers
+  namespace: production
+  labels:
+    rbac.kubernetes.io/team: production-deploy
+subjects:
+- kind: User
+  name: prod-deployer-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: cicd-deployer
+  namespace: default
+roleRef:
+  kind: Role
+  name: production-deployer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Compliance Auditors ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: compliance-auditors
+  labels:
+    rbac.kubernetes.io/team: compliance
+subjects:
+- kind: User
+  name: compliance-auditor-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: external-auditor
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: compliance-team
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: auditor
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# CI/CD Service Account ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cicd-deployer
+  labels:
+    rbac.kubernetes.io/automation: cicd
+subjects:
+- kind: ServiceAccount
+  name: cicd-deployer
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: cicd-deployer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Monitoring ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitoring
+  labels:
+    rbac.kubernetes.io/automation: monitoring
+subjects:
+- kind: ServiceAccount
+  name: monitoring
+  namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: monitoring
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Backup Operator ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backup-operator
+  labels:
+    rbac.kubernetes.io/automation: backup
+subjects:
+- kind: ServiceAccount
+  name: backup-operator
+  namespace: backup-system
+roleRef:
+  kind: ClusterRole
+  name: backup-operator
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# RBAC Monitoring - ClusterRole to monitor RBAC changes
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rbac-monitor
+  labels:
+    rbac.kubernetes.io/role-type: security-monitoring
+rules:
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "clusterroles", "rolebindings", "clusterrolebindings"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch", "create"]
+
+---
+# RBAC Monitor Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rbac-monitor
+  namespace: security-system
+  labels:
+    app.kubernetes.io/component: rbac-monitoring
+automountServiceAccountToken: true
+
+---
+# RBAC Monitor ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rbac-monitor
+  labels:
+    rbac.kubernetes.io/automation: security-monitoring
+subjects:
+- kind: ServiceAccount
+  name: rbac-monitor
+  namespace: security-system
+roleRef:
+  kind: ClusterRole
+  name: rbac-monitor
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Emergency Access (disabled by default)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: emergency-access-disabled
+  labels:
+    rbac.kubernetes.io/emergency: "true"
+    rbac.kubernetes.io/enabled: "false"
+  annotations:
+    rbac.kubernetes.io/approval-process: "https://company.com/emergency-access"
+    rbac.kubernetes.io/contact: "security-team@company.com"
+subjects:
+- kind: User
+  name: emergency-user-1
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: cto
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: emergency-access
+  apiGroup: rbac.authorization.k8s.io

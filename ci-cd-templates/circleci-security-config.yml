@@ -1,0 +1,483 @@
+# CircleCI Security Configuration
+# Enterprise security scanning and compliance pipeline for CircleCI
+
+version: 2.1
+
+# Orbs for security scanning
+orbs:
+  python: circleci/python@2.1.1
+  node: circleci/node@5.1.0
+  go: circleci/go@1.9.1
+  docker: circleci/docker@2.4.0
+  snyk: snyk/snyk@1.7.0
+
+# Executors
+executors:
+  security-scanner:
+    docker:
+      - image: cimg/python:3.9
+    resource_class: medium
+    environment:
+      TRIVY_CACHE_DIR: /tmp/trivy-cache
+
+  docker-scanner:
+    docker:
+      - image: cimg/base:stable
+    resource_class: medium
+    setup_remote_docker:
+      version: 20.10.14
+
+# Commands for reusable security scanning logic
+commands:
+  install-security-tools:
+    description: "Install security scanning tools"
+    steps:
+      - run:
+          name: Install Security Tools
+          command: |
+            # Install Trivy
+            sudo apt-get update
+            sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install -y trivy
+
+            # Install GitLeaks
+            wget -O gitleaks.tar.gz https://github.com/zricethezav/gitleaks/releases/download/v8.15.2/gitleaks_8.15.2_linux_x64.tar.gz
+            tar -xzf gitleaks.tar.gz
+            sudo mv gitleaks /usr/local/bin/
+            chmod +x /usr/local/bin/gitleaks
+
+            # Install Python security tools
+            pip install --upgrade pip
+            pip install semgrep bandit safety detect-secrets
+
+            # Install additional tools
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+  setup-security-workspace:
+    description: "Setup security scanning workspace"
+    steps:
+      - run:
+          name: Setup Security Workspace
+          command: |
+            mkdir -p security-reports
+            mkdir -p /tmp/trivy-cache
+
+  evaluate-security-gate:
+    description: "Evaluate security gate and fail if thresholds exceeded"
+    parameters:
+      max-critical:
+        type: integer
+        default: 0
+      max-high:
+        type: integer
+        default: 5
+    steps:
+      - run:
+          name: Security Gate Evaluation
+          command: |
+            echo "🚦 Evaluating security gate..."
+
+            # Initialize counters
+            TOTAL_CRITICAL=0
+            TOTAL_HIGH=0
+
+            # Function to safely get JSON array length
+            get_vuln_count() {
+              local file="$1"
+              local filter="$2"
+              if [ -f "$file" ]; then
+                jq "$filter | length" "$file" 2>/dev/null || echo "0"
+              else
+                echo "0"
+              fi
+            }
+
+            # Check Trivy results
+            if [ -f "security-reports/trivy-report.json" ]; then
+              CRITICAL_CONTAINER=$(get_vuln_count "security-reports/trivy-report.json" '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")]')
+              HIGH_CONTAINER=$(get_vuln_count "security-reports/trivy-report.json" '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")]')
+              TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_CONTAINER))
+              TOTAL_HIGH=$((TOTAL_HIGH + HIGH_CONTAINER))
+              echo "Container scan - Critical: $CRITICAL_CONTAINER, High: $HIGH_CONTAINER"
+            fi
+
+            # Check Semgrep results
+            if [ -f "security-reports/semgrep-report.json" ]; then
+              CRITICAL_SAST=$(get_vuln_count "security-reports/semgrep-report.json" '[.results[] | select(.extra.severity == "ERROR")]')
+              HIGH_SAST=$(get_vuln_count "security-reports/semgrep-report.json" '[.results[] | select(.extra.severity == "WARNING")]')
+              TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_SAST))
+              TOTAL_HIGH=$((TOTAL_HIGH + HIGH_SAST))
+              echo "SAST scan - Critical: $CRITICAL_SAST, High: $HIGH_SAST"
+            fi
+
+            # Check Safety results
+            if [ -f "security-reports/safety-report.json" ]; then
+              CRITICAL_DEPS=$(get_vuln_count "security-reports/safety-report.json" '[.[] | select(.vulnerability.v == "HIGH")]')
+              TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_DEPS))
+              echo "Python dependencies - Critical: $CRITICAL_DEPS"
+            fi
+
+            echo "📊 Security Summary:"
+            echo "   Total Critical: $TOTAL_CRITICAL (max allowed: << parameters.max-critical >>)"
+            echo "   Total High: $TOTAL_HIGH (max allowed: << parameters.max-high >>)"
+
+            # Apply security gate rules
+            if [ $TOTAL_CRITICAL -gt << parameters.max-critical >> ]; then
+              echo "❌ Security gate FAILED: $TOTAL_CRITICAL critical vulnerabilities exceed threshold (<< parameters.max-critical >>)"
+              exit 1
+            fi
+
+            if [ $TOTAL_HIGH -gt << parameters.max-high >> ]; then
+              echo "❌ Security gate FAILED: $TOTAL_HIGH high vulnerabilities exceed threshold (<< parameters.max-high >>)"
+              exit 1
+            fi
+
+            echo "✅ Security gate PASSED!"
+
+# Jobs
+jobs:
+  secret-detection:
+    executor: security-scanner
+    steps:
+      - checkout
+      - setup-security-workspace
+      - install-security-tools
+      - run:
+          name: GitLeaks Secret Detection
+          command: |
+            echo "🔍 Running GitLeaks secret detection..."
+            gitleaks detect --source . --report-format json --report-path security-reports/gitleaks-report.json --verbose || true
+
+            # Check if secrets were found
+            if [ -s security-reports/gitleaks-report.json ]; then
+              echo "⚠️ Potential secrets detected!"
+              cat security-reports/gitleaks-report.json
+              # Uncomment to fail on secrets:
+              # exit 1
+            fi
+      - run:
+          name: detect-secrets Scan
+          command: |
+            echo "🔍 Running detect-secrets scan..."
+            detect-secrets scan --all-files --force-use-all-plugins > security-reports/secrets-baseline.json || true
+      - store_artifacts:
+          path: security-reports
+      - persist_to_workspace:
+          root: .
+          paths:
+            - security-reports
+
+  sast-analysis:
+    executor: security-scanner
+    steps:
+      - checkout
+      - setup-security-workspace
+      - install-security-tools
+      - run:
+          name: Semgrep SAST Analysis
+          command: |
+            echo "🔍 Running Semgrep SAST analysis..."
+            semgrep --config=auto --json --output=security-reports/semgrep-report.json . || true
+            semgrep --config=auto --severity=ERROR . || true
+      - run:
+          name: Bandit Python Security Analysis
+          command: |
+            if find . -name "*.py" -not -path "./venv/*" | grep -q .; then
+              echo "🐍 Running Bandit Python security analysis..."
+              bandit -r . -f json -o security-reports/bandit-report.json || true
+              bandit -r . -ll || true
+            else
+              echo "No Python files found, skipping Bandit scan"
+            fi
+      - store_artifacts:
+          path: security-reports
+      - persist_to_workspace:
+          root: .
+          paths:
+            - security-reports
+
+  dependency-scanning:
+    executor: security-scanner
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - install-security-tools
+      - run:
+          name: Python Dependency Scanning
+          command: |
+            if [ -f "requirements.txt" ] || [ -f "Pipfile" ]; then
+              echo "🐍 Scanning Python dependencies with Safety..."
+              safety check --json --output security-reports/safety-report.json || true
+              safety check --short-report || true
+
+              # pip-audit scan
+              pip install pip-audit
+              pip-audit --format=json --output=security-reports/pip-audit-report.json || true
+            else
+              echo "No Python requirements found, skipping Python dependency scan"
+            fi
+      - run:
+          name: Node.js Dependency Scanning
+          command: |
+            if [ -f "package.json" ]; then
+              echo "📦 Scanning Node.js dependencies..."
+              # Install Node.js and npm
+              curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+
+              npm audit --audit-level high --json > security-reports/npm-audit-report.json || true
+              npm audit --audit-level high || true
+
+              # Install and run retire.js
+              npm install -g retire
+              retire --outputformat json --outputpath security-reports/retire-report.json || true
+            else
+              echo "No package.json found, skipping Node.js dependency scan"
+            fi
+      - run:
+          name: Go Dependency Scanning
+          command: |
+            if [ -f "go.mod" ]; then
+              echo "🐹 Scanning Go dependencies..."
+              # Install Go
+              wget https://go.dev/dl/go1.19.linux-amd64.tar.gz
+              sudo tar -C /usr/local -xzf go1.19.linux-amd64.tar.gz
+              export PATH=$PATH:/usr/local/go/bin
+
+              # Nancy scan
+              curl -L -o nancy https://github.com/sonatypecommunity/nancy/releases/download/v1.0.42/nancy-v1.0.42-linux-amd64
+              chmod +x nancy
+              go list -json -deps ./... | ./nancy sleuth --output-format json > security-reports/nancy-report.json || true
+            else
+              echo "No go.mod found, skipping Go dependency scan"
+            fi
+      - store_artifacts:
+          path: security-reports
+      - persist_to_workspace:
+          root: .
+          paths:
+            - security-reports
+
+  container-scanning:
+    executor: docker-scanner
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - setup_remote_docker
+      - install-security-tools
+      - run:
+          name: Build Docker Image
+          command: |
+            if [ -f "Dockerfile" ]; then
+              echo "🐳 Building Docker image..."
+              docker build -t ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_SHA1} .
+            else
+              echo "No Dockerfile found, skipping container scanning"
+              exit 0
+            fi
+      - run:
+          name: Trivy Container Scan
+          command: |
+            if [ -f "Dockerfile" ]; then
+              echo "🔍 Scanning container with Trivy..."
+              trivy image --format json --output security-reports/trivy-report.json ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_SHA1}
+              trivy image --severity HIGH,CRITICAL ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_SHA1} || true
+            fi
+      - run:
+          name: Grype Container Scan
+          command: |
+            if [ -f "Dockerfile" ]; then
+              echo "🔍 Scanning container with Grype..."
+              grype ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_SHA1} -o json > security-reports/grype-report.json
+              grype ${CIRCLE_PROJECT_REPONAME}:${CIRCLE_SHA1} --fail-on critical || true
+            fi
+      - store_artifacts:
+          path: security-reports
+      - persist_to_workspace:
+          root: .
+          paths:
+            - security-reports
+
+  iac-security:
+    executor: security-scanner
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - install-security-tools
+      - run:
+          name: Checkov IaC Security Scan
+          command: |
+            echo "🏗️ Running Checkov IaC security scan..."
+            pip install checkov
+            checkov --directory . --output json --output-file security-reports/checkov-report.json || true
+            checkov --directory . --compact
+      - run:
+          name: TFSec Terraform Security Scan
+          command: |
+            if find . -name "*.tf" | grep -q .; then
+              echo "🔍 Running TFSec Terraform security scan..."
+              curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
+              tfsec . --format json --out security-reports/tfsec-report.json || true
+              tfsec . --soft-fail
+            else
+              echo "No Terraform files found, skipping TFSec scan"
+            fi
+      - run:
+          name: kube-score Kubernetes Security
+          command: |
+            if find . -name "*.yaml" -o -name "*.yml" | xargs grep -l "apiVersion" | grep -q .; then
+              echo "🔍 Running kube-score Kubernetes security scan..."
+              wget https://github.com/zegl/kube-score/releases/download/v1.16.1/kube-score_1.16.1_linux_amd64.tar.gz
+              tar -xzf kube-score_1.16.1_linux_amd64.tar.gz
+              chmod +x kube-score
+              find . -name "*.yaml" -o -name "*.yml" | xargs grep -l "apiVersion" | xargs ./kube-score score --output-format json > security-reports/kube-score-report.json || true
+            else
+              echo "No Kubernetes manifests found, skipping kube-score scan"
+            fi
+      - store_artifacts:
+          path: security-reports
+      - persist_to_workspace:
+          root: .
+          paths:
+            - security-reports
+
+  security-gate:
+    executor: security-scanner
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install jq
+          command: sudo apt-get update && sudo apt-get install -y jq
+      - evaluate-security-gate:
+          max-critical: 0
+          max-high: 5
+
+  compliance-report:
+    executor: security-scanner
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Generate Compliance Report
+          command: |
+            echo "📊 Generating security compliance report..."
+
+            cat > security-reports/compliance-report.json << EOF
+            {
+              "metadata": {
+                "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "build_number": "${CIRCLE_BUILD_NUM}",
+                "project": "${CIRCLE_PROJECT_REPONAME}",
+                "branch": "${CIRCLE_BRANCH}",
+                "commit": "${CIRCLE_SHA1}",
+                "workflow_id": "${CIRCLE_WORKFLOW_ID}"
+              },
+              "scans_completed": {
+                "secret_detection": $([ -f "security-reports/gitleaks-report.json" ] && echo "true" || echo "false"),
+                "sast_analysis": $([ -f "security-reports/semgrep-report.json" ] && echo "true" || echo "false"),
+                "dependency_scanning": $([ -f "security-reports/safety-report.json" ] || [ -f "security-reports/npm-audit-report.json" ] && echo "true" || echo "false"),
+                "container_scanning": $([ -f "security-reports/trivy-report.json" ] && echo "true" || echo "false"),
+                "iac_security": $([ -f "security-reports/checkov-report.json" ] && echo "true" || echo "false")
+              },
+              "security_gate": {
+                "status": "PASSED",
+                "critical_threshold": 0,
+                "high_threshold": 5
+              },
+              "compliance_frameworks": [
+                "OWASP Top 10",
+                "NIST Cybersecurity Framework",
+                "CIS Controls",
+                "SANS Top 25"
+              ]
+            }
+            EOF
+
+            echo "✅ Compliance report generated"
+      - store_artifacts:
+          path: security-reports
+
+# Workflows
+workflows:
+  version: 2
+  security-pipeline:
+    jobs:
+      # Parallel security scanning
+      - secret-detection:
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      - sast-analysis:
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      - dependency-scanning:
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      - container-scanning:
+          requires:
+            - secret-detection
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      - iac-security:
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      # Security gate evaluation
+      - security-gate:
+          requires:
+            - secret-detection
+            - sast-analysis
+            - dependency-scanning
+            - container-scanning
+            - iac-security
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+      # Compliance reporting
+      - compliance-report:
+          requires:
+            - security-gate
+          filters:
+            branches:
+              ignore: /^dependabot\/.*/
+
+  # Scheduled daily security scan
+  nightly-security-scan:
+    triggers:
+      - schedule:
+          cron: "0 2 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - secret-detection
+      - sast-analysis
+      - dependency-scanning
+      - container-scanning
+      - iac-security
+      - security-gate:
+          requires:
+            - secret-detection
+            - sast-analysis
+            - dependency-scanning
+            - container-scanning
+            - iac-security
+      - compliance-report:
+          requires:
+            - security-gate

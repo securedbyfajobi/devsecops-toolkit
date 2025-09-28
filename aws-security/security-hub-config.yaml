@@ -1,0 +1,76 @@
+# AWS Security Hub Enterprise Analyzer Configuration
+# This file configures advanced security analysis and remediation capabilities
+
+# Severity thresholds for compliance scoring
+severity_thresholds:
+  critical_max: 0        # Maximum allowed critical findings for green status
+  high_max: 5           # Maximum allowed high findings for green status
+  medium_max: 20        # Maximum allowed medium findings for green status
+
+# Automated remediation settings
+auto_remediation:
+  enabled: false         # Enable automated remediation (use with caution)
+  dry_run: true         # Preview changes without applying them
+  allowed_actions:      # Whitelist of safe automated actions
+    - tag_resource
+    - update_security_group
+    - enable_encryption
+    - configure_logging
+
+# Notification settings
+notifications:
+  email_enabled: false
+  slack_webhook: null    # Set to your Slack webhook URL
+  sns_topic_arn: null   # Set to your SNS topic ARN for alerts
+  teams_webhook: null   # Set to your Microsoft Teams webhook URL
+
+# Compliance frameworks to focus on
+compliance_frameworks:
+  - aws-foundational-security-standard
+  - cis-aws-foundations-benchmark
+  - pci-dss
+  - iso-27001
+
+# Finding types to exclude from analysis
+excluded_finding_types:
+  - "Effects of Software Review"
+  - "Sensitive Data Identifications"
+
+# Custom security rules (future enhancement)
+custom_rules:
+  - name: "High Risk S3 Buckets"
+    description: "S3 buckets with public read/write access"
+    severity: "CRITICAL"
+    resource_types: ["AwsS3Bucket"]
+
+  - name: "Unrestricted Security Groups"
+    description: "Security groups allowing 0.0.0.0/0 access"
+    severity: "HIGH"
+    resource_types: ["AwsEc2SecurityGroup"]
+
+# Export settings
+export_settings:
+  include_raw_findings: true
+  max_findings_per_export: 1000
+  compress_exports: false
+
+# Integration settings
+integrations:
+  jira:
+    enabled: false
+    url: null
+    username: null
+    api_token: null
+    project_key: null
+
+  servicenow:
+    enabled: false
+    instance_url: null
+    username: null
+    password: null
+
+# Performance settings
+performance:
+  max_concurrent_requests: 10
+  request_timeout: 30
+  retry_attempts: 3

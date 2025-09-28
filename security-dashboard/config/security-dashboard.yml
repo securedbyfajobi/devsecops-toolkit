@@ -1,0 +1,253 @@
+# Security Dashboard Configuration
+# Comprehensive configuration for the security monitoring dashboard
+
+# Application settings
+app:
+  name: "Security Monitoring Dashboard"
+  version: "2.0.0"
+  debug: false
+  host: "0.0.0.0"
+  port: 8080
+  workers: 4
+
+# Security settings
+security:
+  refresh_interval: 60  # seconds
+  alert_threshold_critical: 0
+  alert_threshold_high: 5
+  alert_threshold_medium: 20
+  data_retention_days: 90
+  enable_real_time: true
+  enable_notifications: true
+  session_timeout: 3600  # 1 hour
+
+# Database configuration
+database:
+  url: "postgresql://postgres:password@localhost:5432/security_dashboard"
+  pool_size: 10
+  max_overflow: 20
+  echo: false
+  ssl_mode: "prefer"
+
+# Redis configuration
+redis:
+  url: "redis://localhost:6379/0"
+  max_connections: 10
+  timeout: 30
+  retry_attempts: 3
+
+# Cloud provider configurations
+cloud_providers:
+  - name: "aws"
+    enabled: true
+    region: "us-east-1"
+    credentials:
+      access_key_id: "${AWS_ACCESS_KEY_ID}"
+      secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
+      session_token: "${AWS_SESSION_TOKEN}"
+    endpoints:
+      security_hub_endpoint: "https://securityhub.us-east-1.amazonaws.com"
+      config_endpoint: "https://config.us-east-1.amazonaws.com"
+      guardduty_endpoint: "https://guardduty.us-east-1.amazonaws.com"
+      cloudtrail_endpoint: "https://cloudtrail.us-east-1.amazonaws.com"
+
+  - name: "azure"
+    enabled: true
+    region: "East US"
+    credentials:
+      client_id: "${AZURE_CLIENT_ID}"
+      client_secret: "${AZURE_CLIENT_SECRET}"
+      tenant_id: "${AZURE_TENANT_ID}"
+      subscription_id: "${AZURE_SUBSCRIPTION_ID}"
+    endpoints:
+      security_center_endpoint: "https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Security"
+      monitor_endpoint: "https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Insights"
+
+  - name: "gcp"
+    enabled: false
+    region: "us-central1"
+    credentials:
+      service_account_key: "${GCP_SERVICE_ACCOUNT_KEY}"
+      project_id: "${GCP_PROJECT_ID}"
+    endpoints:
+      security_center_endpoint: "https://securitycenter.googleapis.com"
+      monitoring_endpoint: "https://monitoring.googleapis.com"
+
+# Kubernetes configuration
+kubernetes:
+  enabled: true
+  config_path: "${HOME}/.kube/config"
+  namespace: "security-system"
+  falco_endpoint: "http://falco.security-system.svc.cluster.local:8765"
+
+# Compliance frameworks
+compliance_frameworks:
+  - name: "CIS"
+    enabled: true
+    version: "1.4.0"
+    description: "CIS Kubernetes Benchmark"
+
+  - name: "NIST"
+    enabled: true
+    version: "1.1"
+    description: "NIST Cybersecurity Framework"
+
+  - name: "SOC2"
+    enabled: true
+    version: "2017"
+    description: "SOC 2 Type II Controls"
+
+  - name: "PCI_DSS"
+    enabled: true
+    version: "4.0"
+    description: "Payment Card Industry Data Security Standard"
+
+  - name: "AWS_FOUNDATIONAL"
+    enabled: true
+    version: "1.0.0"
+    description: "AWS Foundational Security Standard"
+
+  - name: "AZURE_SECURITY_BENCHMARK"
+    enabled: true
+    version: "3.0"
+    description: "Azure Security Benchmark"
+
+# Alerting and notifications
+alerting:
+  channels:
+    - type: "email"
+      enabled: true
+      smtp_server: "smtp.company.com"
+      smtp_port: 587
+      username: "${SMTP_USERNAME}"
+      password: "${SMTP_PASSWORD}"
+      recipients:
+        - "security@company.com"
+        - "compliance@company.com"
+
+    - type: "slack"
+      enabled: true
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      channel: "#security-alerts"
+
+    - type: "teams"
+      enabled: false
+      webhook_url: "${TEAMS_WEBHOOK_URL}"
+
+    - type: "pagerduty"
+      enabled: false
+      service_key: "${PAGERDUTY_SERVICE_KEY}"
+
+# SIEM integration
+siem:
+  enabled: true
+  type: "elasticsearch"  # elasticsearch, splunk, qradar, sentinel
+  endpoint: "https://elasticsearch.company.com:9200"
+  username: "${SIEM_USERNAME}"
+  password: "${SIEM_PASSWORD}"
+  index_prefix: "security-dashboard"
+  batch_size: 100
+  flush_interval: 60
+
+# Metrics and monitoring
+metrics:
+  enabled: true
+  prometheus_port: 9090
+  grafana_integration: true
+  custom_metrics:
+    - name: "security_findings_total"
+      type: "counter"
+      description: "Total number of security findings"
+
+    - name: "compliance_score"
+      type: "gauge"
+      description: "Overall compliance score"
+
+    - name: "risk_score"
+      type: "gauge"
+      description: "Overall risk score"
+
+# Dashboard settings
+dashboard:
+  theme: "dark"
+  auto_refresh: true
+  refresh_interval: 30  # seconds
+  default_time_range: "24h"
+  enable_export: true
+  export_formats: ["pdf", "csv", "json"]
+
+  widgets:
+    - name: "security_overview"
+      type: "summary"
+      position: { x: 0, y: 0, w: 12, h: 4 }
+
+    - name: "findings_by_severity"
+      type: "chart"
+      chart_type: "donut"
+      position: { x: 0, y: 4, w: 6, h: 6 }
+
+    - name: "compliance_status"
+      type: "chart"
+      chart_type: "bar"
+      position: { x: 6, y: 4, w: 6, h: 6 }
+
+    - name: "recent_findings"
+      type: "table"
+      position: { x: 0, y: 10, w: 12, h: 8 }
+
+    - name: "threat_intelligence"
+      type: "map"
+      position: { x: 0, y: 18, w: 12, h: 6 }
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/security-dashboard.log"
+  max_size: "100MB"
+  backup_count: 5
+
+  loggers:
+    - name: "uvicorn"
+      level: "INFO"
+    - name: "fastapi"
+      level: "INFO"
+    - name: "asyncio"
+      level: "WARNING"
+
+# API configuration
+api:
+  title: "Security Monitoring Dashboard API"
+  description: "Enterprise Security Monitoring and Compliance Dashboard API"
+  version: "2.0.0"
+  cors_origins: ["*"]
+  rate_limit: "100/minute"
+  authentication:
+    enabled: true
+    type: "jwt"  # jwt, oauth2, api_key
+    secret_key: "${API_SECRET_KEY}"
+    algorithm: "HS256"
+    access_token_expire_minutes: 60
+
+# Performance settings
+performance:
+  cache_ttl: 300  # 5 minutes
+  max_concurrent_requests: 100
+  request_timeout: 30
+  batch_processing_size: 1000
+
+# Development settings
+development:
+  hot_reload: true
+  debug_sql: false
+  mock_data: true
+  test_mode: false
+
+# Feature flags
+features:
+  real_time_monitoring: true
+  automated_remediation: false
+  machine_learning_insights: false
+  threat_intelligence: true
+  vulnerability_scanning: true
+  compliance_automation: true

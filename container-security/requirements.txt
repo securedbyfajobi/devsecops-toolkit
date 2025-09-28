@@ -1,0 +1,65 @@
+# Container Security Scanner Dependencies
+
+# Core dependencies
+pyyaml>=6.0
+asyncio-mqtt>=0.13.0
+aiofiles>=23.0.0
+aiohttp>=3.8.0
+
+# CLI and argument parsing
+click>=8.1.0
+rich>=13.0.0
+tabulate>=0.9.0
+
+# Container runtime integration
+docker>=6.0.0
+podman-py>=4.0.0
+
+# Vulnerability scanning (optional - will try to use system binaries first)
+python-trivy>=0.1.0  # If available
+anchore-engine-cli>=0.10.0  # If available
+
+# Cloud integrations
+boto3>=1.26.0  # AWS
+azure-identity>=1.12.0  # Azure
+azure-mgmt-containerregistry>=10.0.0
+google-cloud-artifact-registry>=1.8.0  # GCP
+google-cloud-container>=2.17.0
+
+# Security Hub and SIEM integrations
+requests>=2.28.0
+elasticsearch>=8.0.0
+splunk-sdk>=1.7.0
+
+# Report generation
+jinja2>=3.1.0
+weasyprint>=59.0  # For PDF reports
+matplotlib>=3.6.0  # For charts
+plotly>=5.17.0  # Interactive charts
+
+# SARIF support
+sarif-om>=1.0.4
+
+# Testing dependencies
+pytest>=7.2.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.10.0
+pytest-cov>=4.0.0
+
+# Development dependencies
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+pre-commit>=3.0.0
+
+# Optional security enhancements
+cryptography>=39.0.0
+keyring>=23.13.0
+
+# Kubernetes integration
+kubernetes>=25.3.0
+helm>=3.11.0
+
+# Container image analysis
+python-magic>=0.4.27
+py7zr>=0.20.0  # Archive support

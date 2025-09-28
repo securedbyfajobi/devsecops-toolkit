@@ -1,10 +1,12 @@
-# GitLab CI/CD Security Template
-# Comprehensive security scanning pipeline with SAST, DAST, and dependency scanning
+# GitLab CI/CD Enterprise Security Template
+# Comprehensive security scanning pipeline with SAST, DAST, container scanning, and compliance
 
 stages:
+  - pre-security
   - security-scan
   - build
   - security-test
+  - compliance
   - deploy
 
 variables:
@@ -13,9 +15,41 @@ variables:
   SAST_ANALYZER_IMAGE_TAG: "latest"
   DAST_WEBSITE: $CI_ENVIRONMENT_URL
 
+  # Container registry
+  REGISTRY: $CI_REGISTRY
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+
+  # Security thresholds
+  MAX_CRITICAL_VULNS: 0
+  MAX_HIGH_VULNS: 5
+
   # Docker security
   DOCKER_DRIVER: overlay2
   DOCKER_TLS_CERTDIR: ""
+
+# Pre-security validation
+security-policy-check:
+  stage: pre-security
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache git
+  script:
+    - echo "🔍 Validating security policies..."
+    - |
+      # Check for required security files
+      if [ ! -f "SECURITY.md" ]; then
+        echo "❌ SECURITY.md file not found"
+        exit 1
+      fi
+
+      # Check for .gitignore patterns
+      if ! grep -q "\.env" .gitignore 2>/dev/null; then
+        echo "⚠️  Warning: .env files not ignored in .gitignore"
+      fi
+
+      echo "✅ Security policy validation completed"
+  rules:
+    - if: $CI_COMMIT_BRANCH
 
 # SAST (Static Application Security Testing)
 sast:
@@ -162,39 +196,150 @@ compliance_check:
   rules:
     - if: $CI_COMMIT_BRANCH && $CI_ENVIRONMENT_URL
 
-# Security gate - fail pipeline if critical vulnerabilities found
+# Enhanced Security gate with comprehensive evaluation
 security_gate:
   stage: security-test
   image: alpine:latest
   before_script:
-    - apk add --no-cache jq
+    - apk add --no-cache jq curl
   script:
-    - echo "Evaluating security scan results..."
+    - echo "🚦 Evaluating comprehensive security scan results..."
     - |
+      # Initialize counters
+      TOTAL_CRITICAL=0
+      TOTAL_HIGH=0
+
       # Check SAST results
       if [ -f "gl-sast-report.json" ]; then
-        CRITICAL_SAST=$(jq '.vulnerabilities[] | select(.severity == "Critical")' gl-sast-report.json | jq -s length)
-        echo "Critical SAST vulnerabilities found: $CRITICAL_SAST"
-        if [ $CRITICAL_SAST -gt 0 ]; then
-          echo "❌ Critical SAST vulnerabilities detected! Pipeline blocked."
-          exit 1
-        fi
+        CRITICAL_SAST=$(jq '[.vulnerabilities[] | select(.severity == "Critical")] | length' gl-sast-report.json 2>/dev/null || echo "0")
+        HIGH_SAST=$(jq '[.vulnerabilities[] | select(.severity == "High")] | length' gl-sast-report.json 2>/dev/null || echo "0")
+        TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_SAST))
+        TOTAL_HIGH=$((TOTAL_HIGH + HIGH_SAST))
+        echo "SAST - Critical: $CRITICAL_SAST, High: $HIGH_SAST"
       fi
 
       # Check container scan results
       if [ -f "trivy-report.json" ]; then
-        CRITICAL_CONTAINER=$(jq '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")' trivy-report.json | jq -s length)
-        echo "Critical container vulnerabilities found: $CRITICAL_CONTAINER"
-        if [ $CRITICAL_CONTAINER -gt 5 ]; then  # Allow up to 5 critical vulns
-          echo "❌ Too many critical container vulnerabilities! Pipeline blocked."
+        CRITICAL_CONTAINER=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-report.json 2>/dev/null || echo "0")
+        HIGH_CONTAINER=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-report.json 2>/dev/null || echo "0")
+        TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_CONTAINER))
+        TOTAL_HIGH=$((TOTAL_HIGH + HIGH_CONTAINER))
+        echo "Container - Critical: $CRITICAL_CONTAINER, High: $HIGH_CONTAINER"
+      fi
+
+      # Check dependency scan results
+      if [ -f "gl-dependency-scanning-report.json" ]; then
+        CRITICAL_DEPS=$(jq '[.vulnerabilities[] | select(.severity == "Critical")] | length' gl-dependency-scanning-report.json 2>/dev/null || echo "0")
+        HIGH_DEPS=$(jq '[.vulnerabilities[] | select(.severity == "High")] | length' gl-dependency-scanning-report.json 2>/dev/null || echo "0")
+        TOTAL_CRITICAL=$((TOTAL_CRITICAL + CRITICAL_DEPS))
+        TOTAL_HIGH=$((TOTAL_HIGH + HIGH_DEPS))
+        echo "Dependencies - Critical: $CRITICAL_DEPS, High: $HIGH_DEPS"
+      fi
+
+      # Check secret detection results
+      if [ -f "gl-secret-detection-report.json" ]; then
+        SECRETS_FOUND=$(jq '[.vulnerabilities[]] | length' gl-secret-detection-report.json 2>/dev/null || echo "0")
+        if [ $SECRETS_FOUND -gt 0 ]; then
+          echo "❌ $SECRETS_FOUND secrets detected! Pipeline blocked."
           exit 1
         fi
       fi
 
-      echo "✅ Security gate passed!"
+      echo "📊 Security Summary:"
+      echo "   Total Critical: $TOTAL_CRITICAL (max allowed: $MAX_CRITICAL_VULNS)"
+      echo "   Total High: $TOTAL_HIGH (max allowed: $MAX_HIGH_VULNS)"
+
+      # Apply security gate rules
+      if [ $TOTAL_CRITICAL -gt $MAX_CRITICAL_VULNS ]; then
+        echo "❌ Security gate FAILED: $TOTAL_CRITICAL critical vulnerabilities exceed threshold ($MAX_CRITICAL_VULNS)"
+        exit 1
+      fi
+
+      if [ $TOTAL_HIGH -gt $MAX_HIGH_VULNS ]; then
+        echo "❌ Security gate FAILED: $TOTAL_HIGH high vulnerabilities exceed threshold ($MAX_HIGH_VULNS)"
+        exit 1
+      fi
+
+      echo "✅ Security gate PASSED! All vulnerabilities within acceptable thresholds."
   dependencies:
     - sast
+    - dependency_scanning
     - container_scanning
+    - secret_detection
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Infrastructure as Code Security Scanning
+iac_security:
+  stage: security-test
+  image: python:3.9-alpine
+  before_script:
+    - pip install checkov
+    - apk add --no-cache curl
+  script:
+    - echo "🔍 Scanning Infrastructure as Code..."
+    - |
+      # Checkov multi-cloud IaC scanning
+      checkov --directory . --output json --output-file checkov-report.json || true
+      checkov --directory . --compact
+
+      # TFSec for Terraform (if .tf files exist)
+      if find . -name "*.tf" | grep -q .; then
+        curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | sh
+        tfsec . --format json --out tfsec-report.json || true
+        tfsec . --soft-fail
+      fi
+  artifacts:
+    reports:
+      junit: iac-security-results.xml
+    paths:
+      - checkov-report.json
+      - tfsec-report.json
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Compliance validation
+compliance_validation:
+  stage: compliance
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache jq curl
+  script:
+    - echo "📋 Validating security compliance..."
+    - |
+      # Generate compliance report
+      cat > compliance-report.json << EOF
+      {
+        "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "pipeline_id": "$CI_PIPELINE_ID",
+        "project": "$CI_PROJECT_NAME",
+        "branch": "$CI_COMMIT_REF_NAME",
+        "commit": "$CI_COMMIT_SHA",
+        "scans_completed": {
+          "sast": $([ -f "gl-sast-report.json" ] && echo "true" || echo "false"),
+          "dependency_scanning": $([ -f "gl-dependency-scanning-report.json" ] && echo "true" || echo "false"),
+          "container_scanning": $([ -f "trivy-report.json" ] && echo "true" || echo "false"),
+          "secret_detection": $([ -f "gl-secret-detection-report.json" ] && echo "true" || echo "false"),
+          "iac_security": $([ -f "checkov-report.json" ] && echo "true" || echo "false")
+        },
+        "compliance_frameworks": [
+          "OWASP Top 10",
+          "NIST Cybersecurity Framework",
+          "CIS Controls",
+          "ISO 27001"
+        ],
+        "security_gate_status": "PASSED"
+      }
+      EOF
+
+      echo "✅ Compliance validation completed"
+  artifacts:
+    paths:
+      - compliance-report.json
+    expire_in: 30 days
+  dependencies:
+    - security_gate
   rules:
     - if: $CI_COMMIT_BRANCH
 
